@@ -1,0 +1,536 @@
+import 'dart:io';
+import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:provider/provider.dart';
+import 'package:signature/signature.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:csv/csv.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:file_picker/file_picker.dart';
+import '../models/invoice.dart';
+import '../providers/settings_provider.dart';
+import '../providers/invoice_provider.dart';
+
+class BusinessProfileScreen extends StatefulWidget {
+  const BusinessProfileScreen({super.key});
+
+  @override
+  State<BusinessProfileScreen> createState() => _BusinessProfileScreenState();
+}
+
+class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
+  final _formKey = GlobalKey<FormState>();
+  late TextEditingController _nameController;
+  late TextEditingController _emailController;
+  late TextEditingController _phoneController;
+  late TextEditingController _addressController;
+  late TextEditingController _revenueController;
+  late TextEditingController _termsLabelController;
+  late TextEditingController _signatureLabelController;
+  late TextEditingController _termsContentController;
+  String? _logoPath;
+  String? _signaturePath;
+  String _selectedCurrency = '\u20B5';
+  late SignatureController _signatureController;
+  bool _isSigning = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final settings = context.read<SettingsProvider>();
+    final biz = settings.businessInfo;
+    _nameController = TextEditingController(text: biz?.name);
+    _emailController = TextEditingController(text: biz?.email);
+    _phoneController = TextEditingController(text: biz?.phone);
+    _addressController = TextEditingController(text: biz?.address);
+    _revenueController = TextEditingController(text: biz?.revenueGoal.toString());
+    _termsLabelController = TextEditingController(text: biz?.pdfTermsLabel ?? 'TERMS & CONDITIONS');
+    _signatureLabelController = TextEditingController(text: biz?.pdfSignatureLabel ?? 'Authorized Signature');
+    _termsContentController = TextEditingController(text: biz?.terms);
+    _logoPath = biz?.logoPath;
+    _signaturePath = biz?.signaturePath;
+    _selectedCurrency = biz?.currency ?? '\u20B5';
+    
+    _signatureController = SignatureController(
+      penStrokeWidth: 3,
+      penColor: const Color(0xFF1E3A8A),
+      exportBackgroundColor: Colors.white,
+    );
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _emailController.dispose();
+    _phoneController.dispose();
+    _addressController.dispose();
+    _revenueController.dispose();
+    _termsLabelController.dispose();
+    _signatureLabelController.dispose();
+    _termsContentController.dispose();
+    _signatureController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickImage(bool isLogo) async {
+    final picker = ImagePicker();
+    final image = await picker.pickImage(source: ImageSource.gallery);
+    if (image != null) {
+      setState(() {
+        if (isLogo) {
+          _logoPath = image.path;
+        } else {
+          _signaturePath = image.path;
+        }
+      });
+    }
+  }
+
+  void _save() {
+    if (_formKey.currentState!.validate()) {
+      final info = BusinessInfo(
+        name: _nameController.text,
+        email: _emailController.text,
+        phone: _phoneController.text,
+        address: _addressController.text,
+        logoPath: _logoPath,
+        signaturePath: _signaturePath,
+        revenueGoal: double.tryParse(_revenueController.text) ?? 0.0,
+        currency: _selectedCurrency,
+        terms: _termsContentController.text,
+        pdfTermsLabel: _termsLabelController.text,
+        pdfSignatureLabel: _signatureLabelController.text,
+      );
+      context.read<SettingsProvider>().updateBusinessInfo(info);
+      Navigator.pop(context);
+    }
+  }
+
+  Future<void> _exportInvoicesToCSV() async {
+    try {
+      final invoiceProvider = context.read<InvoiceProvider>();
+      final invoices = invoiceProvider.invoices;
+      
+      if (invoices.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No invoices to export')));
+        return;
+      }
+
+      List<List<dynamic>> rows = [];
+      // Header
+      rows.add(['Invoice ID', 'Date', 'Client', 'Amount', 'Paid', 'Status']);
+      
+      for (var inv in invoices) {
+        rows.add([
+          inv.id,
+          inv.date.toString().split(' ')[0],
+          inv.clientInfo.name,
+          inv.total.toStringAsFixed(2),
+          inv.amountPaid.toStringAsFixed(2),
+          inv.isEstimate ? 'Estimate' : (inv.amountPaid >= inv.total ? 'Paid' : 'Unpaid'),
+        ]);
+      }
+
+      String csvData = const ListToCsvConverter().convert(rows);
+      final directory = await getTemporaryDirectory();
+      final path = '${directory.path}/invoices_export_${DateTime.now().millisecondsSinceEpoch}.csv';
+      final file = File(path);
+      await file.writeAsString(csvData);
+
+      if (!mounted) return;
+      await Share.shareXFiles([XFile(path)], text: 'Exported Invoices CSV');
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Export failed: $e')));
+    }
+  }
+
+  Future<void> _backupData() async {
+    try {
+      final invoiceProvider = context.read<InvoiceProvider>();
+      final settingsProvider = context.read<SettingsProvider>();
+      
+      Map<String, dynamic> backup = {
+        'version': 1,
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+        'businessInfo': settingsProvider.businessInfo?.toMap(),
+        'customers': invoiceProvider.customers.map((e) => e.toMap()).toList(),
+        'products': invoiceProvider.products.map((e) => e.toMap()).toList(),
+        'invoices': invoiceProvider.invoices.map((e) => e.toMap()).toList(),
+      };
+
+      String jsonString = json.encode(backup);
+      final directory = await getTemporaryDirectory();
+      final path = '${directory.path}/docara_backup_${DateTime.now().millisecondsSinceEpoch}.json';
+      final file = File(path);
+      await file.writeAsString(jsonString);
+
+      if (!mounted) return;
+      await Share.shareXFiles([XFile(path)], text: 'Docara POS Backup File');
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Backup failed: $e')));
+    }
+  }
+
+  Future<void> _restoreData() async {
+    try {
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['json'],
+      );
+
+      if (!mounted) return;
+
+      if (result != null) {
+        File file = File(result.files.single.path!);
+        String content = await file.readAsString();
+        
+        if (!mounted) return;
+        
+        Map<String, dynamic> data = json.decode(content);
+
+        if (!data.containsKey('version')) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Invalid backup file')));
+          return;
+        }
+
+        final invoiceProvider = context.read<InvoiceProvider>();
+        final settingsProvider = context.read<SettingsProvider>();
+
+        // Restore Business Info
+        if (data.containsKey('businessInfo')) {
+          settingsProvider.updateBusinessInfo(BusinessInfo.fromMap(data['businessInfo']));
+        }
+        
+        // Restore Invoices/Products/Customers
+        invoiceProvider.loadFromBackup(data);
+
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Restoration successful!'), backgroundColor: Colors.green));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Restore failed: $e')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8FAFC),
+      appBar: AppBar(
+        title: const Text('Business Profile', style: TextStyle(color: Color(0xFF1E293B), fontWeight: FontWeight.bold)),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        systemOverlayStyle: SystemUiOverlayStyle.dark,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Color(0xFF1E293B)),
+          onPressed: () => Navigator.pop(context),
+        ),
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Stack(
+                  children: [
+                    GestureDetector(
+                      onTap: () => _pickImage(true),
+                      child: Container(
+                        width: 100,
+                        height: 100,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 10, offset: const Offset(0, 4)),
+                          ],
+                          border: Border.all(color: Colors.white, width: 4),
+                        ),
+                        child: ClipOval(
+                          child: _logoPath != null && File(_logoPath!).existsSync()
+                              ? Image.file(File(_logoPath!), fit: BoxFit.cover)
+                              : Container(
+                                  color: Colors.grey[50],
+                                  child: Icon(Icons.add_a_photo_outlined, color: Colors.grey[400], size: 30),
+                                ),
+                        ),
+                      ),
+                    ),
+                    if (_logoPath != null && File(_logoPath!).existsSync())
+                      Positioned(
+                        right: 0,
+                        top: 0,
+                        child: GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              _logoPath = null;
+                            });
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.all(4),
+                            decoration: const BoxDecoration(
+                              color: Colors.red,
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(Icons.close, color: Colors.white, size: 16),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 32),
+              _buildCustomField('Business Name', _nameController, Icons.business_outlined),
+              _buildCustomField('Business Email', _emailController, Icons.email_outlined, keyboardType: TextInputType.emailAddress),
+              _buildCustomField('Business Phone', _phoneController, Icons.phone_outlined, keyboardType: TextInputType.phone),
+              _buildCustomField('Business Address', _addressController, Icons.location_on_outlined, maxLines: 2),
+              
+              const SizedBox(height: 8),
+              const Text('Default Currency', style: TextStyle(fontSize: 11, color: Colors.grey, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              _buildCurrencyDropdown(),
+ 
+              _buildCustomField('Monthly Revenue Goal', _revenueController, Icons.radar, keyboardType: TextInputType.number),
+              const Padding(
+                padding: EdgeInsets.only(left: 4, bottom: 20),
+                child: Text('Target revenue to track on your dashboard', style: TextStyle(fontSize: 10, color: Colors.grey)),
+              ),
+              
+              const Text('PDF Customization', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+              const Text('Change the labels that appear on your PDF documents.', style: TextStyle(fontSize: 11, color: Colors.grey)),
+              const SizedBox(height: 16),
+              _buildCustomField('Terms & Conditions Label', _termsLabelController, Icons.label_important_outline),
+              _buildCustomField('Terms & Conditions Content', _termsContentController, Icons.description_outlined, maxLines: 3),
+              _buildCustomField('Authorized Signature Label', _signatureLabelController, Icons.drive_file_rename_outline),
+              
+              const SizedBox(height: 8),
+ 
+              const Text('Business Signature', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+              const Text('This signature will appear on all your documents.', style: TextStyle(fontSize: 11, color: Colors.grey)),
+              const SizedBox(height: 16),
+              _buildSignatureBox(),
+ 
+              const SizedBox(height: 40),
+              _buildActionButton(Icons.download_outlined, 'Export Invoices to CSV', _exportInvoicesToCSV),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(child: _buildActionButton(Icons.cloud_upload_outlined, 'Back Up', _backupData, isHalf: true)),
+                  const SizedBox(width: 16),
+                  Expanded(child: _buildActionButton(Icons.cloud_download_outlined, 'Restore', _restoreData, isHalf: true, color: Colors.orange)),
+                ],
+              ),
+              const SizedBox(height: 40),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: _save,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1E3A8A),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 18),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  ),
+                  child: const Text('SAVE PROFILE', style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+              ),
+              const SizedBox(height: 40),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCustomField(String label, TextEditingController controller, IconData icon, {int maxLines = 1, TextInputType? keyboardType}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: const TextStyle(fontSize: 11, color: Colors.grey, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              boxShadow: [
+                BoxShadow(color: Colors.black.withValues(alpha: 0.02), blurRadius: 10, offset: const Offset(0, 4)),
+              ],
+            ),
+            child: TextFormField(
+              controller: controller,
+              maxLines: maxLines,
+              keyboardType: keyboardType,
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
+              decoration: InputDecoration(
+                prefixIcon: Icon(icon, color: const Color(0xFF1E293B), size: 20),
+                border: InputBorder.none,
+                contentPadding: const EdgeInsets.symmetric(vertical: 15, horizontal: 10),
+              ),
+              validator: (v) => v!.isEmpty ? 'Field required' : null,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCurrencyDropdown() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.02),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: _selectedCurrency,
+          isExpanded: true,
+          icon: const Icon(Icons.keyboard_arrow_down, color: Colors.grey),
+          items: <String>['\u20B5', '\$', '\u00A3', '\u20AC', '\u20A6'].map((val) {
+            return DropdownMenuItem<String>(
+              value: val,
+              child: Row(
+                children: [
+                  const Icon(Icons.monetization_on_outlined, color: Color(0xFF1E293B), size: 20),
+                  const SizedBox(width: 12),
+                  Text(val, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
+                ],
+              ),
+            );
+          }).toList(),
+          onChanged: (val) {
+            if (val != null) {
+              setState(() => _selectedCurrency = val);
+            }
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _saveSignature() async {
+    if (_signatureController.isNotEmpty) {
+      final image = await _signatureController.toPngBytes();
+      if (image != null) {
+        final directory = await getApplicationDocumentsDirectory();
+        final path = '${directory.path}/signature_${DateTime.now().millisecondsSinceEpoch}.png';
+        final file = File(path);
+        await file.writeAsBytes(image);
+        setState(() {
+          _signaturePath = path;
+          _isSigning = false;
+        });
+      }
+    }
+  }
+
+  Widget _buildSignatureBox() {
+    return Container(
+      width: double.infinity,
+      height: 220,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.grey[200]!),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.02), blurRadius: 10, offset: const Offset(0, 4)),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(20),
+        child: Stack(
+          children: [
+            if (_isSigning)
+              Signature(
+                controller: _signatureController,
+                backgroundColor: Colors.white,
+                height: 220,
+              )
+            else if (_signaturePath != null && File(_signaturePath!).existsSync())
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Image.file(File(_signaturePath!), fit: BoxFit.contain),
+                ),
+              )
+            else
+              Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.edit_note, size: 40, color: Colors.grey[300]),
+                    const SizedBox(height: 8),
+                    const Text('No signature yet', style: TextStyle(color: Colors.grey, fontSize: 12)),
+                  ],
+                ),
+              ),
+            
+            // Buttons Overlay
+            Positioned(
+              bottom: 10,
+              right: 10,
+              child: Row(
+                children: [
+                  if (_isSigning) ...[
+                    IconButton(
+                      onPressed: () => _signatureController.clear(),
+                      icon: const Icon(Icons.refresh, color: Colors.red),
+                      tooltip: 'Clear',
+                    ),
+                    IconButton(
+                      onPressed: _saveSignature,
+                      icon: const Icon(Icons.check_circle, color: Colors.green, size: 30),
+                      tooltip: 'Save Signature',
+                    ),
+                  ] else ...[
+                    if (_signaturePath != null)
+                      IconButton(
+                        onPressed: () => setState(() => _signaturePath = null),
+                        icon: const Icon(Icons.delete_outline, color: Colors.red),
+                        tooltip: 'Delete Signature',
+                      ),
+                    IconButton(
+                      onPressed: () => setState(() => _isSigning = true),
+                      icon: Icon(Icons.edit_outlined, color: Colors.indigo[900]),
+                      tooltip: 'Sign',
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildActionButton(IconData icon, String label, VoidCallback onTap, {bool isHalf = false, Color? color}) {
+    return OutlinedButton.icon(
+      onPressed: onTap,
+      icon: Icon(icon, size: 18, color: color ?? const Color(0xFF1E3A8A)),
+      label: Text(label, style: TextStyle(color: color ?? const Color(0xFF1E3A8A), fontWeight: FontWeight.w600, fontSize: 13)),
+      style: OutlinedButton.styleFrom(
+        padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 10),
+        side: BorderSide(color: Colors.grey[300]!),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        backgroundColor: Colors.white,
+      ),
+    );
+  }
+}
