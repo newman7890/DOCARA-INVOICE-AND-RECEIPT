@@ -1,0 +1,12 @@
+CompileFlags:
+  Add:
+    - "-IC:/Users/jonat/OneDrive/Desktop/DOCARA INVOICE AND RECEIPT/windows/flutter/ephemeral/cpp_client_wrapper/include"
+    - "-IC:/Users/jonat/OneDrive/Desktop/DOCARA INVOICE AND RECEIPT/windows/flutter/ephemeral"
+    - "-IC:/Users/jonat/OneDrive/Desktop/DOCARA INVOICE AND RECEIPT/windows"
+    - "-IC:/Users/jonat/OneDrive/Desktop/DOCARA INVOICE AND RECEIPT/windows/runner"
+    - -DWIN32
+    - -D_WINDOWS
+    - -DUNICODE
+    - -D_UNICODE
+    - -DNOMINMAX
+    - -std=c++17

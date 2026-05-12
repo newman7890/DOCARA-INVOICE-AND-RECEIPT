@@ -30,6 +30,10 @@ class _InvoiceEditorScreenState extends State<InvoiceEditorScreen> {
   late TextEditingController _invoiceIdController;
   late TextEditingController _cashierNameController;
   
+  // Hardware Scanner State
+  String _barcodeBuffer = '';
+  DateTime? _lastKeyPress;
+
   @override
   void initState() {
     super.initState();
@@ -39,16 +43,44 @@ class _InvoiceEditorScreenState extends State<InvoiceEditorScreen> {
     _clientAddressController = TextEditingController(text: invoice.clientInfo.address);
     _clientContactController = TextEditingController(text: invoice.clientInfo.contact);
     _cashierNameController = TextEditingController(text: invoice.cashierName);
+    
+    // Listen for physical USB/Bluetooth barcode scanners
+    HardwareKeyboard.instance.addHandler(_handleKeyEvent);
   }
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
     _invoiceIdController.dispose();
     _clientNameController.dispose();
     _clientAddressController.dispose();
     _clientContactController.dispose();
     _cashierNameController.dispose();
     super.dispose();
+  }
+
+  bool _handleKeyEvent(KeyEvent event) {
+    if (event is KeyDownEvent) {
+      if (event.logicalKey == LogicalKeyboardKey.enter) {
+        if (_barcodeBuffer.isNotEmpty && _barcodeBuffer.length > 3) {
+          // A barcode was completely scanned
+          _onBarcodeScanned(_barcodeBuffer.trim());
+          _barcodeBuffer = '';
+          return true; // consume the event
+        }
+        _barcodeBuffer = '';
+      } else if (event.character != null && event.character!.trim().isNotEmpty) {
+        final now = DateTime.now();
+        // Hardware scanners type extremely fast (usually < 50ms between keys)
+        // If it's slower than 100ms, it's probably a human typing, so reset the buffer.
+        if (_lastKeyPress == null || now.difference(_lastKeyPress!).inMilliseconds > 100) {
+          _barcodeBuffer = '';
+        }
+        _barcodeBuffer += event.character!;
+        _lastKeyPress = now;
+      }
+    }
+    return false; // let the event pass through to text fields
   }
 
   void _addItem() {
@@ -246,26 +278,30 @@ class _InvoiceEditorScreenState extends State<InvoiceEditorScreen> {
             actions: [
               TextButton(onPressed: () => Navigator.pop(context), child: const Text('CANCEL')),
               ElevatedButton(
-                onPressed: () {
+                onPressed: () async {
                   if (nameController.text.isNotEmpty && priceController.text.isNotEmpty) {
-                    final newProduct = Product(
-                      id: DateTime.now().millisecondsSinceEpoch.toString(),
-                      name: nameController.text,
-                      price: double.tryParse(priceController.text) ?? 0.0,
-                      barcode: code,
-                    );
-                    // Add to catalog
-                    provider.addProduct(newProduct);
-                    // Add to current invoice
-                    provider.addItem(InvoiceItem(
-                      name: newProduct.name,
-                      quantity: 1,
-                      sellingPrice: newProduct.price,
-                    ));
-                    Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Added ${newProduct.name} to catalog and invoice')),
-                    );
+                    // Anti-Fraud: Only Admin can add new products to catalog during scan
+                    if (await _authorizeAdmin(context)) {
+                      if (!context.mounted) return;
+                      final newProduct = Product(
+                        id: DateTime.now().millisecondsSinceEpoch.toString(),
+                        name: nameController.text,
+                        price: double.tryParse(priceController.text) ?? 0.0,
+                        costPrice: (double.tryParse(priceController.text) ?? 0.0) * 0.7,
+                        stockQuantity: 100,
+                        barcode: code,
+                      );
+                      provider.addProduct(newProduct);
+                      provider.addItem(InvoiceItem(
+                        name: newProduct.name,
+                        quantity: 1,
+                        sellingPrice: newProduct.price,
+                      ));
+                      Navigator.pop(context);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Added ${newProduct.name} to catalog and invoice')),
+                      );
+                    }
                   }
                 }, 
                 child: const Text('SAVE')
@@ -333,7 +369,12 @@ class _InvoiceEditorScreenState extends State<InvoiceEditorScreen> {
                     title: Text(p.name, style: const TextStyle(fontWeight: FontWeight.bold)),
                     trailing: Text('$currency${p.price.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFF1E3A8A), fontWeight: FontWeight.bold)),
                     onTap: () {
-                      provider.addItem(InvoiceItem(name: p.name, quantity: 1, sellingPrice: p.price));
+                      provider.addItem(InvoiceItem(
+                        name: p.name, 
+                        quantity: 1, 
+                        sellingPrice: p.price,
+                        costPrice: p.costPrice,
+                      ));
                       Navigator.pop(context);
                       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Added ${p.name}')));
                     },
@@ -527,6 +568,14 @@ class _InvoiceEditorScreenState extends State<InvoiceEditorScreen> {
                 const SizedBox(height: 4),
                 InkWell(
                   onTap: () async {
+                    // Anti-Fraud: Only Admin can back-date or forward-date invoices
+                    if (provider.activeStaff != null) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Staff cannot change invoice dates. Only Admin can edit dates.')),
+                      );
+                      return;
+                    }
+                    
                     final picked = await showDatePicker(
                       context: context,
                       initialDate: invoice.date,
@@ -545,7 +594,7 @@ class _InvoiceEditorScreenState extends State<InvoiceEditorScreen> {
                       border: Border.all(color: const Color(0xFFF1F5F9)),
                     ),
                     child: Text(
-                      DateFormat('yyyy-MM-dd').format(invoice.date),
+                      DateFormat('dd MMM yyyy').format(invoice.date),
                       style: const TextStyle(fontSize: 14, color: Color(0xFF1E293B)),
                     ),
                   ),
@@ -739,6 +788,7 @@ class _InvoiceEditorScreenState extends State<InvoiceEditorScreen> {
   }
 
   Widget _buildSummaryCard(InvoiceProvider provider, Invoice invoice, String currency) {
+    final isAdmin = provider.activeStaff == null;
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -755,6 +805,12 @@ class _InvoiceEditorScreenState extends State<InvoiceEditorScreen> {
               SizedBox(
                 width: 60,
                 child: TextFormField(
+                  readOnly: !isAdmin, // Cashiers can't type discounts directly
+                  onTap: !isAdmin ? () async {
+                    if (await _authorizeAdmin(context)) {
+                      // Once authorized, we'd ideally allow editing, but for now just show a prompt or enable
+                    }
+                  } : null,
                   initialValue: invoice.discountValue.toString(),
                   keyboardType: TextInputType.number,
                   textAlign: TextAlign.right,
@@ -768,8 +824,18 @@ class _InvoiceEditorScreenState extends State<InvoiceEditorScreen> {
                 decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.5), borderRadius: BorderRadius.circular(8)),
                 child: Row(
                   children: [
-                    _toggleItem('%', invoice.discountType == DiscountType.percentage, () => provider.updateDiscount(invoice.discountValue, DiscountType.percentage)),
-                    _toggleItem(currency, invoice.discountType == DiscountType.fixed, () => provider.updateDiscount(invoice.discountValue, DiscountType.fixed)),
+                    _toggleItem('%', invoice.discountType == DiscountType.percentage, () async {
+                      if (isAdmin || await _authorizeAdmin(context)) {
+                        if (!context.mounted) return;
+                        provider.updateDiscount(invoice.discountValue, DiscountType.percentage);
+                      }
+                    }),
+                    _toggleItem(currency, invoice.discountType == DiscountType.fixed, () async {
+                      if (isAdmin || await _authorizeAdmin(context)) {
+                        if (!context.mounted) return;
+                        provider.updateDiscount(invoice.discountValue, DiscountType.fixed);
+                      }
+                    }),
                   ],
                 ),
               ),
@@ -1006,6 +1072,48 @@ class _InvoiceEditorScreenState extends State<InvoiceEditorScreen> {
       ],
     );
   }
+  Future<bool> _authorizeAdmin(BuildContext context) async {
+    final invoiceProvider = context.read<InvoiceProvider>();
+    if (invoiceProvider.activeStaff == null) return true; // Already admin
+
+    final passController = TextEditingController();
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Admin Authorization Required'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Please enter Admin Password to authorize this action.'),
+            const SizedBox(height: 16),
+            TextField(
+              controller: passController,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: 'Admin Password',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () {
+              final managerPin = context.read<SettingsProvider>().businessInfo?.managerPin ?? '1234';
+              if (passController.text == managerPin) {
+                Navigator.pop(context, true);
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Invalid Manager PIN')));
+              }
+            },
+            child: const Text('Authorize'),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
 }
 
 class _AddItemDialog extends StatefulWidget {
@@ -1021,6 +1129,7 @@ class _AddItemDialogState extends State<_AddItemDialog> {
   final _nameController = TextEditingController();
   final _qtyController = TextEditingController(text: '1');
   final _priceController = TextEditingController();
+  final _costController = TextEditingController();
 
   @override
   Widget build(BuildContext context) {
@@ -1035,9 +1144,22 @@ class _AddItemDialogState extends State<_AddItemDialog> {
             children: [
               Expanded(child: TextField(controller: _qtyController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Qty'))),
               const SizedBox(width: 12),
-              Expanded(child: TextField(controller: _priceController, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: 'Price (${widget.currency})'))),
+              Expanded(
+                child: TextField(
+                  controller: _priceController, 
+                  keyboardType: TextInputType.number, 
+                  readOnly: context.read<InvoiceProvider>().activeStaff != null, // Lock price for cashiers
+                  decoration: InputDecoration(
+                    labelText: 'Price (${widget.currency})',
+                    suffixIcon: context.read<InvoiceProvider>().activeStaff != null ? const Icon(Icons.lock_outline, size: 16) : null,
+                  )
+                )
+              ),
             ],
           ),
+          const SizedBox(height: 12),
+          if (context.read<InvoiceProvider>().activeStaff == null)
+            TextField(controller: _costController, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: 'Cost Price per unit (${widget.currency})')),
         ],
       ),
       actions: [
@@ -1045,12 +1167,30 @@ class _AddItemDialogState extends State<_AddItemDialog> {
         ElevatedButton(
           onPressed: () {
             final name = _nameController.text;
-            final qty = int.tryParse(_qtyController.text) ?? 1;
+            final qty = int.tryParse(_qtyController.text) ?? 0;
             final price = double.tryParse(_priceController.text) ?? 0;
-            if (name.isNotEmpty && price > 0) {
-              widget.onAdd(InvoiceItem(name: name, quantity: qty, sellingPrice: price));
-              Navigator.pop(context);
+            final cost = double.tryParse(_costController.text) ?? 0;
+            
+            if (name.isEmpty) {
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Item name is required')));
+              return;
             }
+            if (qty <= 0) {
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Quantity must be greater than 0')));
+              return;
+            }
+            if (price <= 0) {
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Price must be greater than 0')));
+              return;
+            }
+
+            widget.onAdd(InvoiceItem(
+              name: name, 
+              quantity: qty, 
+              sellingPrice: price,
+              costPrice: cost > 0 ? cost : null,
+            ));
+            Navigator.pop(context);
           },
           child: const Text('ADD'),
         ),

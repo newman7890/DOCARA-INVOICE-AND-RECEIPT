@@ -115,6 +115,20 @@ class _PdfPreviewScreenState extends State<PdfPreviewScreen> {
           ),
         ),
         actions: [
+          // Finish and Go Home
+          IconButton(
+            tooltip: 'Go Home',
+            icon: Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF1F5F9),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(Icons.home_outlined, color: Color(0xFF1E3A8A), size: 18),
+            ),
+            onPressed: () => Navigator.popUntil(context, (route) => route.isFirst),
+          ),
+          const SizedBox(width: 4),
           // Format Selector
           PopupMenuButton<PreviewFormat>(
             tooltip: 'Change Page Format',

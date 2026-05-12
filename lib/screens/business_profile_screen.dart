@@ -30,11 +30,13 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
   late TextEditingController _termsLabelController;
   late TextEditingController _signatureLabelController;
   late TextEditingController _termsContentController;
+  late TextEditingController _managerPinController;
   String? _logoPath;
   String? _signaturePath;
   String _selectedCurrency = '\u20B5';
   late SignatureController _signatureController;
   bool _isSigning = false;
+  late PdfTemplate _selectedTemplate;
 
   @override
   void initState() {
@@ -49,9 +51,11 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
     _termsLabelController = TextEditingController(text: biz?.pdfTermsLabel ?? 'TERMS & CONDITIONS');
     _signatureLabelController = TextEditingController(text: biz?.pdfSignatureLabel ?? 'Authorized Signature');
     _termsContentController = TextEditingController(text: biz?.terms);
+    _managerPinController = TextEditingController(text: biz?.managerPin ?? '1234');
     _logoPath = biz?.logoPath;
     _signaturePath = biz?.signaturePath;
     _selectedCurrency = biz?.currency ?? '\u20B5';
+    _selectedTemplate = biz?.pdfTemplate ?? PdfTemplate.sidebar;
     
     _signatureController = SignatureController(
       penStrokeWidth: 3,
@@ -70,6 +74,7 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
     _termsLabelController.dispose();
     _signatureLabelController.dispose();
     _termsContentController.dispose();
+    _managerPinController.dispose();
     _signatureController.dispose();
     super.dispose();
   }
@@ -78,6 +83,21 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
     final picker = ImagePicker();
     final image = await picker.pickImage(source: ImageSource.gallery);
     if (image != null) {
+      final file = File(image.path);
+      final sizeInBytes = await file.length();
+      final sizeInMb = sizeInBytes / (1024 * 1024);
+
+      if (sizeInMb > 1.5) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Image is too large (>1.5MB). This may slow down PDF generation. Please use a smaller image.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+
       setState(() {
         if (isLogo) {
           _logoPath = image.path;
@@ -88,8 +108,41 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
     }
   }
 
-  void _save() {
+  void _save() async {
     if (_formKey.currentState!.validate()) {
+      // Admin check for sensitive business info
+      final settingsProvider = context.read<SettingsProvider>();
+      final provider = context.read<InvoiceProvider>();
+      if (provider.activeStaff != null) {
+        final passController = TextEditingController();
+        final authorized = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Admin Authorization'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('Only Admin can update Business Profile & Currency. Enter Admin Password:'),
+                const SizedBox(height: 16),
+                TextField(controller: passController, obscureText: true, decoration: const InputDecoration(border: OutlineInputBorder(), labelText: 'Password')),
+              ],
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('CANCEL')),
+              TextButton(
+                onPressed: () {
+                  final managerPin = settingsProvider.businessInfo?.managerPin ?? '1234';
+                  Navigator.pop(context, passController.text == managerPin);
+                }, 
+                child: const Text('AUTHORIZE')
+              ),
+            ],
+          ),
+        );
+        if (authorized != true) return;
+        if (!mounted) return;
+      }
+
       final info = BusinessInfo(
         name: _nameController.text,
         email: _emailController.text,
@@ -102,8 +155,10 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
         terms: _termsContentController.text,
         pdfTermsLabel: _termsLabelController.text,
         pdfSignatureLabel: _signatureLabelController.text,
+        pdfTemplate: _selectedTemplate,
+        managerPin: _managerPinController.text,
       );
-      context.read<SettingsProvider>().updateBusinessInfo(info);
+      settingsProvider.updateBusinessInfo(info);
       Navigator.pop(context);
     }
   }
@@ -111,6 +166,10 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
   Future<void> _exportInvoicesToCSV() async {
     try {
       final invoiceProvider = context.read<InvoiceProvider>();
+      if (invoiceProvider.activeStaff != null) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Only Admin can export data')));
+        return;
+      }
       final invoices = invoiceProvider.invoices;
       
       if (invoices.isEmpty) {
@@ -176,6 +235,13 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
   }
 
   Future<void> _restoreData() async {
+    // Admin check for data restoration
+    final provider = context.read<InvoiceProvider>();
+    if (provider.activeStaff != null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Only Admin can restore backups')));
+      return;
+    }
+
     try {
       FilePickerResult? result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
@@ -304,8 +370,22 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
               ),
               
               const Text('PDF Customization', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
-              const Text('Change the labels that appear on your PDF documents.', style: TextStyle(fontSize: 11, color: Colors.grey)),
+              const Text('Change the layout and labels on your PDF documents.', style: TextStyle(fontSize: 11, color: Colors.grey)),
               const SizedBox(height: 16),
+              
+              const Text('Invoice Template', style: TextStyle(fontSize: 11, color: Colors.grey, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(child: _buildTemplateOption(PdfTemplate.sidebar, 'Sidebar', 'Modern')),
+                  const SizedBox(width: 8),
+                  Expanded(child: _buildTemplateOption(PdfTemplate.classic, 'Classic', 'Traditional')),
+                  const SizedBox(width: 8),
+                  Expanded(child: _buildTemplateOption(PdfTemplate.minimalist, 'Minimal', 'Clean')),
+                ],
+              ),
+              const SizedBox(height: 24),
+
               _buildCustomField('Terms & Conditions Label', _termsLabelController, Icons.label_important_outline),
               _buildCustomField('Terms & Conditions Content', _termsContentController, Icons.description_outlined, maxLines: 3),
               _buildCustomField('Authorized Signature Label', _signatureLabelController, Icons.drive_file_rename_outline),
@@ -314,6 +394,10 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
  
               const Text('Business Signature', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
               const Text('This signature will appear on all your documents.', style: TextStyle(fontSize: 11, color: Colors.grey)),
+              const SizedBox(height: 16),
+              _buildSectionHeader('PDF & Security Settings'),
+              const SizedBox(height: 16),
+              _buildCustomField('Manager PIN', _managerPinController, Icons.lock_outline, keyboardType: TextInputType.number),
               const SizedBox(height: 16),
               _buildSignatureBox(),
  
@@ -345,6 +429,16 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildSectionHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8, top: 16),
+      child: Text(
+        title,
+        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF1E293B)),
       ),
     );
   }
@@ -518,6 +612,60 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
         ),
       ),
     );
+  }
+
+  Widget _buildTemplateOption(PdfTemplate template, String title, String subtitle) {
+    final isSelected = _selectedTemplate == template;
+    return GestureDetector(
+      onTap: () => setState(() => _selectedTemplate = template),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFF1E3A8A).withValues(alpha: 0.05) : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isSelected ? const Color(0xFF1E3A8A) : Colors.grey[200]!,
+            width: 2,
+          ),
+          boxShadow: [
+            BoxShadow(color: Colors.black.withValues(alpha: 0.02), blurRadius: 10, offset: const Offset(0, 4)),
+          ],
+        ),
+        child: Column(
+          children: [
+            Icon(
+              _getTemplateIcon(template),
+              color: isSelected ? const Color(0xFF1E3A8A) : Colors.grey[400],
+              size: 28,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              title,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: isSelected ? const Color(0xFF1E3A8A) : const Color(0xFF1E293B),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              subtitle,
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 10, color: Colors.grey[500]),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+  
+  IconData _getTemplateIcon(PdfTemplate template) {
+    switch (template) {
+      case PdfTemplate.sidebar: return Icons.view_sidebar_outlined;
+      case PdfTemplate.classic: return Icons.view_headline_outlined;
+      case PdfTemplate.minimalist: return Icons.notes_outlined;
+    }
   }
 
   Widget _buildActionButton(IconData icon, String label, VoidCallback onTap, {bool isHalf = false, Color? color}) {

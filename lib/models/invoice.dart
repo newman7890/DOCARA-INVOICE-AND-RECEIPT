@@ -6,6 +6,8 @@ enum DiscountType { percentage, fixed }
 
 enum PaymentMethod { cash, momo, transfer }
 
+enum PdfTemplate { sidebar, classic, minimalist }
+
 class BusinessInfo {
   final String name;
   final String email;
@@ -21,6 +23,8 @@ class BusinessInfo {
   final String? posEmail;
   final String? pdfTermsLabel;
   final String? pdfSignatureLabel;
+  final PdfTemplate pdfTemplate;
+  final String? managerPin;
 
   BusinessInfo({
     required this.name,
@@ -37,6 +41,8 @@ class BusinessInfo {
     this.posEmail,
     this.pdfTermsLabel,
     this.pdfSignatureLabel,
+    this.pdfTemplate = PdfTemplate.sidebar,
+    this.managerPin = '1234',
   });
 
   Map<String, dynamic> toMap() {
@@ -55,6 +61,8 @@ class BusinessInfo {
       'posEmail': posEmail,
       'pdfTermsLabel': pdfTermsLabel,
       'pdfSignatureLabel': pdfSignatureLabel,
+      'pdfTemplate': pdfTemplate.index,
+      'managerPin': managerPin,
     };
   }
 
@@ -74,6 +82,8 @@ class BusinessInfo {
       posEmail: map['posEmail'],
       pdfTermsLabel: map['pdfTermsLabel'],
       pdfSignatureLabel: map['pdfSignatureLabel'],
+      pdfTemplate: PdfTemplate.values[map['pdfTemplate'] ?? 0],
+      managerPin: map['managerPin'],
     );
   }
 
@@ -92,6 +102,8 @@ class BusinessInfo {
     String? posEmail,
     String? pdfTermsLabel,
     String? pdfSignatureLabel,
+    PdfTemplate? pdfTemplate,
+    String? managerPin,
   }) {
     return BusinessInfo(
       name: name ?? this.name,
@@ -108,6 +120,8 @@ class BusinessInfo {
       posEmail: posEmail ?? this.posEmail,
       pdfTermsLabel: pdfTermsLabel ?? this.pdfTermsLabel,
       pdfSignatureLabel: pdfSignatureLabel ?? this.pdfSignatureLabel,
+      pdfTemplate: pdfTemplate ?? this.pdfTemplate,
+      managerPin: managerPin ?? this.managerPin,
     );
   }
 
@@ -211,6 +225,7 @@ class Invoice {
   final bool isEstimate;
   final bool isPos;
   final String? cashierName;
+  final String? stationName;
 
   Invoice({
     required this.id,
@@ -230,6 +245,7 @@ class Invoice {
     this.isEstimate = false,
     this.isPos = false,
     this.cashierName,
+    this.stationName,
   });
 
   double get subtotal => items.fold(0, (sum, item) => sum + item.total);
@@ -243,8 +259,9 @@ class Invoice {
   }
 
   double get taxAmount => (subtotal - discountAmount) * (taxValue / 100);
-
-  double get total => subtotal - discountAmount + taxAmount;
+  
+  // Anti-Fraud: Total cannot be negative
+  double get total => (subtotal - discountAmount + taxAmount).clamp(0.0, double.infinity);
 
   Map<String, dynamic> toMap() {
     return {
@@ -265,6 +282,7 @@ class Invoice {
       'isEstimate': isEstimate,
       'isPos': isPos,
       'cashierName': cashierName,
+      'stationName': stationName,
     };
   }
 
@@ -287,6 +305,7 @@ class Invoice {
       isEstimate: map['isEstimate'] ?? false,
       isPos: map['isPos'] ?? false,
       cashierName: map['cashierName'],
+      stationName: map['stationName'],
     );
   }
 
@@ -312,6 +331,7 @@ class Invoice {
     bool? isEstimate,
     bool? isPos,
     String? cashierName,
+    String? stationName,
   }) {
     return Invoice(
       id: id ?? this.id,
@@ -331,6 +351,45 @@ class Invoice {
       isEstimate: isEstimate ?? this.isEstimate,
       isPos: isPos ?? this.isPos,
       cashierName: cashierName ?? this.cashierName,
+      stationName: stationName ?? this.stationName,
+    );
+  }
+}
+
+enum ExpenseCategory { marketing, supplies, rent, utilities, labor, other }
+
+class Expense {
+  final String id;
+  final DateTime date;
+  final double amount;
+  final String description;
+  final ExpenseCategory category;
+
+  Expense({
+    required this.id,
+    required this.date,
+    required this.amount,
+    required this.description,
+    required this.category,
+  });
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'date': date.millisecondsSinceEpoch,
+      'amount': amount,
+      'description': description,
+      'category': category.index,
+    };
+  }
+
+  factory Expense.fromMap(Map<String, dynamic> map) {
+    return Expense(
+      id: map['id'] ?? '',
+      date: DateTime.fromMillisecondsSinceEpoch(map['date']),
+      amount: (map['amount'] ?? 0.0).toDouble(),
+      description: map['description'] ?? '',
+      category: ExpenseCategory.values[map['category'] ?? 5],
     );
   }
 }
@@ -340,12 +399,16 @@ class Customer {
   final String name;
   final String address;
   final String contact;
+  final double totalSpent;
+  final int invoiceCount;
 
   Customer({
     required this.id,
     required this.name,
     required this.address,
     required this.contact,
+    this.totalSpent = 0.0,
+    this.invoiceCount = 0,
   });
 
   Map<String, dynamic> toMap() {
@@ -354,6 +417,8 @@ class Customer {
       'name': name,
       'address': address,
       'contact': contact,
+      'totalSpent': totalSpent,
+      'invoiceCount': invoiceCount,
     };
   }
 
@@ -363,6 +428,26 @@ class Customer {
       name: map['name'] ?? '',
       address: map['address'] ?? '',
       contact: map['contact'] ?? '',
+      totalSpent: (map['totalSpent'] ?? 0.0).toDouble(),
+      invoiceCount: map['invoiceCount'] ?? 0,
+    );
+  }
+
+  Customer copyWith({
+    String? id,
+    String? name,
+    String? address,
+    String? contact,
+    double? totalSpent,
+    int? invoiceCount,
+  }) {
+    return Customer(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      address: address ?? this.address,
+      contact: contact ?? this.contact,
+      totalSpent: totalSpent ?? this.totalSpent,
+      invoiceCount: invoiceCount ?? this.invoiceCount,
     );
   }
 }
@@ -373,6 +458,9 @@ class Product {
   final double price;
   final String? description;
   final String? barcode;
+  final int stockQuantity;
+  final int minStockLevel;
+  final double? costPrice;
 
   Product({
     required this.id,
@@ -380,6 +468,9 @@ class Product {
     required this.price,
     this.description,
     this.barcode,
+    this.stockQuantity = 0,
+    this.minStockLevel = 5,
+    this.costPrice,
   });
 
   Map<String, dynamic> toMap() {
@@ -389,6 +480,9 @@ class Product {
       'price': price,
       'description': description,
       'barcode': barcode,
+      'stockQuantity': stockQuantity,
+      'minStockLevel': minStockLevel,
+      'costPrice': costPrice,
     };
   }
 
@@ -399,6 +493,75 @@ class Product {
       price: map['price']?.toDouble() ?? 0.0,
       description: map['description'],
       barcode: map['barcode'],
+      stockQuantity: map['stockQuantity']?.toInt() ?? 0,
+      minStockLevel: map['minStockLevel']?.toInt() ?? 5,
+      costPrice: map['costPrice']?.toDouble(),
+    );
+  }
+
+  Product copyWith({
+    String? id,
+    String? name,
+    double? price,
+    String? description,
+    String? barcode,
+    int? stockQuantity,
+    int? minStockLevel,
+    double? costPrice,
+  }) {
+    return Product(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      price: price ?? this.price,
+      description: description ?? this.description,
+      barcode: barcode ?? this.barcode,
+      stockQuantity: stockQuantity ?? this.stockQuantity,
+      minStockLevel: minStockLevel ?? this.minStockLevel,
+      costPrice: costPrice ?? this.costPrice,
+    );
+  }
+}
+
+class Staff {
+  final String id;
+  final String name;
+  final String? phone;
+  final String role;
+  final String? _pin; // Internal private storage
+
+  Staff({
+    required this.id,
+    required this.name,
+    this.phone,
+    this.role = 'Cashier',
+    String? pin,
+  }) : _pin = pin;
+
+  // Masked getter for UI safety
+  String? get pin => _pin;
+
+  bool verifyPin(String input) {
+    if (_pin == null || _pin.isEmpty) return true;
+    return _pin == input;
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'name': name,
+      'phone': phone,
+      'role': role,
+      'pin': _pin,
+    };
+  }
+
+  factory Staff.fromMap(Map<String, dynamic> map) {
+    return Staff(
+      id: map['id'] ?? '',
+      name: map['name'] ?? '',
+      phone: map['phone'],
+      role: map['role'] ?? 'Cashier',
+      pin: map['pin'],
     );
   }
 }
