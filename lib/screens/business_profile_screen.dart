@@ -109,57 +109,76 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
   }
 
   void _save() async {
-    if (_formKey.currentState!.validate()) {
-      // Admin check for sensitive business info
-      final settingsProvider = context.read<SettingsProvider>();
-      final provider = context.read<InvoiceProvider>();
-      if (provider.activeStaff != null) {
-        final passController = TextEditingController();
-        final authorized = await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Admin Authorization'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text('Only Admin can update Business Profile & Currency. Enter Admin Password:'),
-                const SizedBox(height: 16),
-                TextField(controller: passController, obscureText: true, decoration: const InputDecoration(border: OutlineInputBorder(), labelText: 'Password')),
+    try {
+      if (_formKey.currentState!.validate()) {
+        // Admin check for sensitive business info
+        final settingsProvider = context.read<SettingsProvider>();
+        final provider = context.read<InvoiceProvider>();
+        if (provider.activeStaff != null) {
+          final passController = TextEditingController();
+          final authorized = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Admin Authorization'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('Only Admin can update Business Profile & Currency. Enter Admin Password:'),
+                  const SizedBox(height: 16),
+                  TextField(controller: passController, obscureText: true, decoration: const InputDecoration(border: OutlineInputBorder(), labelText: 'Password')),
+                ],
+              ),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('CANCEL')),
+                TextButton(
+                  onPressed: () {
+                    final managerPin = settingsProvider.businessInfo?.managerPin ?? '1234';
+                    Navigator.pop(context, passController.text == managerPin);
+                  }, 
+                  child: const Text('AUTHORIZE')
+                ),
               ],
             ),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('CANCEL')),
-              TextButton(
-                onPressed: () {
-                  final managerPin = settingsProvider.businessInfo?.managerPin ?? '1234';
-                  Navigator.pop(context, passController.text == managerPin);
-                }, 
-                child: const Text('AUTHORIZE')
-              ),
-            ],
-          ),
-        );
-        if (authorized != true) return;
-        if (!mounted) return;
-      }
+          );
+          if (authorized != true) return;
+          if (!mounted) return;
+        }
 
-      final info = BusinessInfo(
-        name: _nameController.text,
-        email: _emailController.text,
-        phone: _phoneController.text,
-        address: _addressController.text,
-        logoPath: _logoPath,
-        signaturePath: _signaturePath,
-        revenueGoal: double.tryParse(_revenueController.text) ?? 0.0,
-        currency: _selectedCurrency,
-        terms: _termsContentController.text,
-        pdfTermsLabel: _termsLabelController.text,
-        pdfSignatureLabel: _signatureLabelController.text,
-        pdfTemplate: _selectedTemplate,
-        managerPin: _managerPinController.text,
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Row(children: [CircularProgressIndicator(strokeWidth: 2, color: Colors.white), SizedBox(width: 12), Text('Syncing profile to cloud...')]), duration: Duration(seconds: 10))
+        );
+
+        final info = BusinessInfo(
+          name: _nameController.text,
+          email: _emailController.text,
+          phone: _phoneController.text,
+          address: _addressController.text,
+          logoPath: _logoPath,
+          signaturePath: _signaturePath,
+          revenueGoal: double.tryParse(_revenueController.text) ?? 0.0,
+          currency: _selectedCurrency,
+          terms: _termsContentController.text,
+          pdfTermsLabel: _termsLabelController.text,
+          pdfSignatureLabel: _signatureLabelController.text,
+          pdfTemplate: _selectedTemplate,
+          managerPin: _managerPinController.text,
+        );
+        
+        await settingsProvider.updateBusinessInfo(info);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        Navigator.pop(context);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please fix the errors in the form'), backgroundColor: Colors.red)
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error saving profile: $e'), backgroundColor: Colors.red)
       );
-      settingsProvider.updateBusinessInfo(info);
-      Navigator.pop(context);
     }
   }
 
@@ -320,12 +339,16 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
                           border: Border.all(color: Colors.white, width: 4),
                         ),
                         child: ClipOval(
-                          child: _logoPath != null && File(_logoPath!).existsSync()
-                              ? Image.file(File(_logoPath!), fit: BoxFit.cover)
-                              : Container(
-                                  color: Colors.grey[50],
-                                  child: Icon(Icons.add_a_photo_outlined, color: Colors.grey[400], size: 30),
-                                ),
+                          child: _logoPath != null
+                            ? (_logoPath!.startsWith('http')
+                                ? Image.network(_logoPath!, fit: BoxFit.cover)
+                                : (File(_logoPath!).existsSync()
+                                    ? Image.file(File(_logoPath!), fit: BoxFit.cover)
+                                    : Container(color: Colors.grey[50], child: Icon(Icons.add_a_photo_outlined, color: Colors.grey[400], size: 30))))
+                            : Container(
+                                color: Colors.grey[50],
+                                child: Icon(Icons.add_a_photo_outlined, color: Colors.grey[400], size: 30),
+                              ),
                         ),
                       ),
                     ),
@@ -353,7 +376,7 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
                 ),
               ),
               const SizedBox(height: 32),
-              _buildCustomField('Business Name', _nameController, Icons.business_outlined),
+              _buildCustomField('Business Name', _nameController, Icons.business_outlined, isRequired: true),
               _buildCustomField('Business Email', _emailController, Icons.email_outlined, keyboardType: TextInputType.emailAddress),
               _buildCustomField('Business Phone', _phoneController, Icons.phone_outlined, keyboardType: TextInputType.phone),
               _buildCustomField('Business Address', _addressController, Icons.location_on_outlined, maxLines: 2),
@@ -397,7 +420,7 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
               const SizedBox(height: 16),
               _buildSectionHeader('PDF & Security Settings'),
               const SizedBox(height: 16),
-              _buildCustomField('Manager PIN', _managerPinController, Icons.lock_outline, keyboardType: TextInputType.number),
+              _buildCustomField('Manager PIN', _managerPinController, Icons.lock_outline, keyboardType: TextInputType.number, isRequired: true),
               const SizedBox(height: 16),
               _buildSignatureBox(),
  
@@ -443,7 +466,7 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
     );
   }
 
-  Widget _buildCustomField(String label, TextEditingController controller, IconData icon, {int maxLines = 1, TextInputType? keyboardType}) {
+  Widget _buildCustomField(String label, TextEditingController controller, IconData icon, {int maxLines = 1, TextInputType? keyboardType, bool isRequired = false}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 20),
       child: Column(
@@ -469,7 +492,12 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
                 border: InputBorder.none,
                 contentPadding: const EdgeInsets.symmetric(vertical: 15, horizontal: 10),
               ),
-              validator: (v) => v!.isEmpty ? 'Field required' : null,
+              validator: (v) {
+                if (isRequired && (v == null || v.isEmpty)) {
+                  return 'Field required';
+                }
+                return null;
+              },
             ),
           ),
         ],
@@ -556,11 +584,15 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
                 backgroundColor: Colors.white,
                 height: 220,
               )
-            else if (_signaturePath != null && File(_signaturePath!).existsSync())
+            else if (_signaturePath != null)
               Center(
                 child: Padding(
                   padding: const EdgeInsets.all(20),
-                  child: Image.file(File(_signaturePath!), fit: BoxFit.contain),
+                  child: _signaturePath!.startsWith('http')
+                      ? Image.network(_signaturePath!, fit: BoxFit.contain)
+                      : (File(_signaturePath!).existsSync()
+                          ? Image.file(File(_signaturePath!), fit: BoxFit.contain)
+                          : const SizedBox.shrink()),
                 ),
               )
             else

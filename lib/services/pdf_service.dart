@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:intl/intl.dart';
+import 'package:http/http.dart' as http;
 import '../models/invoice.dart';
 
 class _CachedImage {
@@ -25,24 +26,34 @@ class PdfService {
   static pw.Font? _fontSymbols;
   static final Map<String, _CachedImage> _imageCache = {};
 
-  static pw.MemoryImage? _getImage(String? path) {
+  static Future<pw.MemoryImage?> _getImage(String? path) async {
     if (path == null || path.isEmpty) return null;
     
-    final file = File(path);
-    if (!file.existsSync()) return null;
-
-    final modified = file.lastModifiedSync();
-    
+    // Check cache
     if (_imageCache.containsKey(path)) {
-      final cached = _imageCache[path]!;
-      if (cached.lastModified == modified) {
-        return cached.image;
-      }
+      return _imageCache[path]!.image;
     }
-    
-    final image = pw.MemoryImage(file.readAsBytesSync());
-    _imageCache[path] = _CachedImage(image, modified);
-    return image;
+
+    try {
+      if (path.startsWith('http')) {
+        final response = await http.get(Uri.parse(path));
+        if (response.statusCode == 200) {
+          final image = pw.MemoryImage(response.bodyBytes);
+          _imageCache[path] = _CachedImage(image, DateTime.now());
+          return image;
+        }
+        return null;
+      } else {
+        final file = File(path);
+        if (!file.existsSync()) return null;
+        final modified = file.lastModifiedSync();
+        final image = pw.MemoryImage(file.readAsBytesSync());
+        _imageCache[path] = _CachedImage(image, modified);
+        return image;
+      }
+    } catch (e) {
+      return null;
+    }
   }
 
   static Future<Uint8List> generateInvoicePdf({
@@ -64,9 +75,9 @@ class PdfService {
     );
 
     // Load Images from cache or disk
-    final logoImage = _getImage(businessInfo.logoPath);
-    final watermarkImage = _getImage(invoice.watermarkPath);
-    final signatureImage = _getImage(businessInfo.signaturePath);
+    final logoImage = await _getImage(businessInfo.logoPath);
+    final watermarkImage = await _getImage(invoice.watermarkPath);
+    final signatureImage = await _getImage(businessInfo.signaturePath);
 
     final currency = businessInfo.currency;
     final dateStr = 'DATE: ${DateFormat('dd MMM yyyy').format(invoice.date).toUpperCase()}';

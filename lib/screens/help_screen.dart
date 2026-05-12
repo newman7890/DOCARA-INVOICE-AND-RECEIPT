@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'privacy_policy_screen.dart';
 
 class HelpScreen extends StatelessWidget {
   const HelpScreen({super.key});
@@ -47,62 +48,54 @@ class HelpScreen extends StatelessWidget {
             );
           }
 
-          return Markdown(
-            data: snapshot.data ?? 'No guide content found.',
-            styleSheet: MarkdownStyleSheet(
-              h1: GoogleFonts.inter(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                color: const Color(0xFF1E3A8A),
-              ),
-              h2: GoogleFonts.inter(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-                color: const Color(0xFF1E3A8A),
-                height: 2.0,
-              ),
-              h3: GoogleFonts.inter(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: const Color(0xFF334155),
-                height: 1.8,
-              ),
-              p: GoogleFonts.inter(
-                fontSize: 15,
-                color: const Color(0xFF475569),
-                height: 1.6,
-              ),
-              listBullet: GoogleFonts.inter(
-                fontSize: 15,
-                color: const Color(0xFF1E3A8A),
-              ),
-              blockquote: GoogleFonts.inter(
-                fontSize: 15,
-                color: const Color(0xFF64748B),
-                fontStyle: FontStyle.italic,
-              ),
-              blockquoteDecoration: BoxDecoration(
-                color: const Color(0xFFF1F5F9),
-                border: const Border(
-                  left: BorderSide(color: Color(0xFF1E3A8A), width: 4),
+          return Column(
+            children: [
+              Expanded(
+                child: Markdown(
+                  data: snapshot.data ?? 'No guide content found.',
+                  styleSheet: MarkdownStyleSheet(
+                    h1: GoogleFonts.inter(fontSize: 24, fontWeight: FontWeight.bold, color: const Color(0xFF1E3A8A)),
+                    h2: GoogleFonts.inter(fontSize: 20, fontWeight: FontWeight.bold, color: const Color(0xFF1E3A8A), height: 2.0),
+                    h3: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.bold, color: const Color(0xFF334155), height: 1.8),
+                    p: GoogleFonts.inter(fontSize: 15, color: const Color(0xFF475569), height: 1.6),
+                    listBullet: GoogleFonts.inter(fontSize: 15, color: const Color(0xFF1E3A8A)),
+                    blockquote: GoogleFonts.inter(fontSize: 15, color: const Color(0xFF64748B), fontStyle: FontStyle.italic),
+                    blockquoteDecoration: BoxDecoration(color: const Color(0xFFF1F5F9), border: const Border(left: BorderSide(color: Color(0xFF1E3A8A), width: 4)), borderRadius: BorderRadius.circular(4)),
+                    code: GoogleFonts.firaCode(backgroundColor: const Color(0xFFF1F5F9), color: const Color(0xFFE11D48), fontSize: 13),
+                    tableBorder: TableBorder.all(color: const Color(0xFFE2E8F0)),
+                    tableHead: GoogleFonts.inter(fontWeight: FontWeight.bold, color: const Color(0xFF1E3A8A)),
+                    tableBody: GoogleFonts.inter(color: const Color(0xFF475569)),
+                  ),
+                  padding: const EdgeInsets.all(24),
                 ),
-                borderRadius: BorderRadius.circular(4),
               ),
-              code: GoogleFonts.firaCode(
-                backgroundColor: const Color(0xFFF1F5F9),
-                color: const Color(0xFFE11D48),
-                fontSize: 13,
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 10, offset: const Offset(0, -5))],
+                ),
+                child: SafeArea(
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const PrivacyPolicyScreen())),
+                          icon: const Icon(Icons.privacy_tip_outlined, size: 18),
+                          label: const Text('Privacy Policy'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xFF1E3A8A),
+                            side: const BorderSide(color: Color(0xFF1E3A8A)),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
-              tableBorder: TableBorder.all(color: const Color(0xFFE2E8F0)),
-              tableHead: GoogleFonts.inter(
-                fontWeight: FontWeight.bold,
-                color: const Color(0xFF1E3A8A),
-              ),
-              tableBody: GoogleFonts.inter(
-                color: const Color(0xFF475569),
-              ),
-            ),
-            padding: const EdgeInsets.all(24),
+            ],
           );
         },
       ),

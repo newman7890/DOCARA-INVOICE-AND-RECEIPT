@@ -1545,7 +1545,7 @@ class _HomeScreenState extends State<HomeScreen> {
           if (isAdmin) ...[
             _buildSectionHeader('Revenue Trends', Icons.bar_chart),
             const SizedBox(height: 16),
-            _buildRevenueChart(provider),
+            _buildRevenueChart(provider, currency),
             const SizedBox(height: 24),
           ],
           if (isAdmin || isManager) ...[
@@ -1644,45 +1644,224 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildRevenueChart(InvoiceProvider provider) {
-    final dailyRevenue = provider.dailyRevenue;
-    if (dailyRevenue.isEmpty) return const Center(child: Text('Not enough data for chart', style: TextStyle(fontSize: 12, color: Colors.grey)));
+  Widget _buildRevenueChart(InvoiceProvider provider, String currency) {
+    final revenueData = provider.getChartData(false, false);
+    final profitData = provider.getChartData(true, false);
+    final lastRevenueData = provider.getChartData(false, true);
 
-    final sortedEntries = dailyRevenue.entries.toList()
-      ..sort((a, b) => a.key.compareTo(b.key));
+    final List<FlSpot> revenueSpots = revenueData.entries.map((e) => FlSpot(e.key.toDouble(), e.value)).toList()..sort((a,b) => a.x.compareTo(b.x));
+    final List<FlSpot> profitSpots = profitData.entries.map((e) => FlSpot(e.key.toDouble(), e.value)).toList()..sort((a,b) => a.x.compareTo(b.x));
+    final List<FlSpot> lastRevenueSpots = lastRevenueData.entries.map((e) => FlSpot(e.key.toDouble(), e.value)).toList()..sort((a,b) => a.x.compareTo(b.x));
 
-    final List<FlSpot> spots = [];
-    for (var e in sortedEntries) {
-      spots.add(FlSpot(e.key.day.toDouble(), e.value));
+    if (revenueSpots.isEmpty) {
+      return Container(
+        height: 200,
+        width: double.infinity,
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(24), border: Border.all(color: Colors.grey[100]!)),
+        child: const Center(child: Text('Not enough data for chart', style: TextStyle(fontSize: 12, color: Colors.grey))),
+      );
     }
 
-    // If there is only one day of data, add a zero-value baseline point
-    // so the chart can actually draw a line!
-    if (spots.length == 1) {
-      spots.insert(0, FlSpot(spots.first.x - 1, 0));
+    double maxY = 0;
+    for (var s in revenueSpots) {
+      if (s.y > maxY) maxY = s.y;
     }
+    for (var s in lastRevenueSpots) {
+      if (s.y > maxY) maxY = s.y;
+    }
+    
+    final yInterval = maxY == 0 ? 100.0 : maxY;
+    final chartMaxY = maxY * 1.3;
 
     return Container(
-      height: 200,
-      padding: const EdgeInsets.only(right: 16, top: 16),
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20), border: Border.all(color: Colors.grey[100]!)),
-      child: LineChart(
-        LineChartData(
-          gridData: const FlGridData(show: false),
-          titlesData: const FlTitlesData(show: false),
-          borderData: FlBorderData(show: false),
-          lineBarsData: [
-            LineChartBarData(
-              spots: spots,
-              isCurved: true,
-              color: const Color(0xFF1E3A8A),
-              barWidth: 3,
-              dotData: const FlDotData(show: false),
-              belowBarData: BarAreaData(show: true, color: const Color(0xFF1E3A8A).withValues(alpha: 0.1)),
-            ),
-          ],
-        ),
+      padding: const EdgeInsets.fromLTRB(16, 16, 24, 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 10, offset: const Offset(0, 4))],
+        border: Border.all(color: Colors.grey[50]!),
       ),
+      child: Column(
+        children: [
+          // Header with Period Selection
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Flexible(
+                child: Text(
+                  'Analytics Trends', 
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF1E293B)),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(12)),
+                padding: const EdgeInsets.all(4),
+                child: Row(
+                  children: ChartPeriod.values.map((period) {
+                    final isSelected = provider.chartPeriod == period;
+                    return GestureDetector(
+                      onTap: () => provider.setChartPeriod(period),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: isSelected ? const Color(0xFF1E3A8A) : Colors.transparent,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          period == ChartPeriod.daily ? 'Dy' : (period == ChartPeriod.weekly ? 'Wk' : (period == ChartPeriod.monthly ? 'Mo' : 'Yr')),
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: isSelected ? Colors.white : Colors.grey[600],
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          // Legend
+          Row(
+            children: [
+              _buildLegendItem('Revenue', const Color(0xFF1E3A8A), false),
+              const SizedBox(width: 16),
+              _buildLegendItem('Profit', Colors.green, false),
+              const SizedBox(width: 16),
+              _buildLegendItem('Last Period', Colors.grey[300]!, true),
+            ],
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 200,
+            child: LineChart(
+              LineChartData(
+                gridData: FlGridData(show: true, drawVerticalLine: false, getDrawingHorizontalLine: (value) => FlLine(color: Colors.grey[100]!, strokeWidth: 1)),
+                titlesData: FlTitlesData(
+                  show: true,
+                  rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 22,
+                      interval: 1,
+                      getTitlesWidget: (value, meta) {
+                        final val = value.toInt();
+                        if (provider.chartPeriod == ChartPeriod.daily) {
+                          if (val % 4 != 0) return const SizedBox.shrink();
+                          return SideTitleWidget(meta: meta, child: Text('${val}h', style: TextStyle(color: Colors.grey[400], fontSize: 9)));
+                        }
+                        if (provider.chartPeriod == ChartPeriod.yearly) {
+                          if (val < 1 || val > 12 || val % 3 != 0) return const SizedBox.shrink();
+                          const months = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                          return SideTitleWidget(meta: meta, child: Text(months[val], style: TextStyle(color: Colors.grey[400], fontSize: 9)));
+                        }
+                        if (val % 5 != 0 && val != 1 && val != revenueSpots.last.x.toInt()) return const SizedBox.shrink();
+                        return SideTitleWidget(meta: meta, child: Text(val.toString(), style: TextStyle(color: Colors.grey[400], fontSize: 9)));
+                      },
+                    ),
+                  ),
+                  leftTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      interval: yInterval / 2 > 0 ? yInterval / 2 : 100,
+                      getTitlesWidget: (value, meta) {
+                        if (value == 0) return const SizedBox.shrink();
+                        return SideTitleWidget(
+                          meta: meta,
+                          child: Text(
+                            value >= 1000 ? '${(value/1000).toStringAsFixed(1)}k' : value.toStringAsFixed(0),
+                            style: TextStyle(color: Colors.grey[400], fontSize: 9, fontWeight: FontWeight.bold),
+                          ),
+                        );
+                      },
+                      reservedSize: 32,
+                    ),
+                  ),
+                ),
+                borderData: FlBorderData(show: false),
+                minX: provider.chartPeriod == ChartPeriod.daily ? 0 : 1,
+                maxX: provider.chartPeriod == ChartPeriod.daily ? 23 : revenueSpots.last.x,
+                minY: 0,
+                maxY: chartMaxY,
+                lineTouchData: LineTouchData(
+                  touchTooltipData: LineTouchTooltipData(
+                    getTooltipColor: (spot) => const Color(0xFF1E3A8A).withValues(alpha: 0.9),
+                    getTooltipItems: (touchedSpots) {
+                      return touchedSpots.map((spot) {
+                        final isProfitLine = spot.barIndex == 1;
+                        final isLastPeriodLine = spot.barIndex == 2;
+                        final label = isProfitLine ? 'Profit' : (isLastPeriodLine ? 'Prev' : 'Revenue');
+                        return LineTooltipItem(
+                          '$label: $currency${spot.y.toStringAsFixed(0)}',
+                          const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                        );
+                      }).toList();
+                    },
+                  ),
+                ),
+                lineBarsData: [
+                  // Revenue (Main)
+                  LineChartBarData(
+                    spots: revenueSpots,
+                    isCurved: true,
+                    color: const Color(0xFF1E3A8A),
+                    barWidth: 3,
+                    isStrokeCapRound: true,
+                    dotData: const FlDotData(show: false),
+                    belowBarData: BarAreaData(show: true, gradient: LinearGradient(colors: [const Color(0xFF1E3A8A).withValues(alpha: 0.2), const Color(0xFF1E3A8A).withValues(alpha: 0.0)], begin: Alignment.topCenter, end: Alignment.bottomCenter)),
+                  ),
+                  // Profit
+                  LineChartBarData(
+                    spots: profitSpots,
+                    isCurved: true,
+                    color: Colors.green,
+                    barWidth: 3,
+                    isStrokeCapRound: true,
+                    dotData: const FlDotData(show: false),
+                    belowBarData: BarAreaData(show: false),
+                  ),
+                  // Last Period (Dotted)
+                  LineChartBarData(
+                    spots: lastRevenueSpots,
+                    isCurved: true,
+                    color: Colors.grey[300]!,
+                    barWidth: 2,
+                    isStrokeCapRound: true,
+                    dashArray: [5, 5],
+                    dotData: const FlDotData(show: false),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLegendItem(String label, Color color, bool isDotted) {
+    return Row(
+      children: [
+        Container(
+          width: 12,
+          height: 3,
+          decoration: BoxDecoration(
+            color: isDotted ? Colors.transparent : color,
+            borderRadius: BorderRadius.circular(2),
+          ),
+          child: isDotted 
+            ? Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Container(width: 4, height: 3, color: color), Container(width: 4, height: 3, color: color)]) 
+            : null,
+        ),
+        const SizedBox(width: 4),
+        Text(label, style: TextStyle(fontSize: 9, color: Colors.grey[600], fontWeight: FontWeight.bold)),
+      ],
     );
   }
 

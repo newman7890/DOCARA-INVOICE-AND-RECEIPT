@@ -459,6 +459,14 @@ class InvoiceProvider with ChangeNotifier {
   }
 
   // ─── Analytics ─────────────────────────────────────────────
+  ChartPeriod _chartPeriod = ChartPeriod.monthly;
+  ChartPeriod get chartPeriod => _chartPeriod;
+
+  void setChartPeriod(ChartPeriod period) {
+    _chartPeriod = period;
+    notifyListeners();
+  }
+
   double get totalSalesRevenue =>
       _invoices.where((i) => !i.isEstimate).fold(0, (s, i) => s + i.total);
 
@@ -490,6 +498,102 @@ class InvoiceProvider with ChangeNotifier {
       data[d] = (data[d] ?? 0) + inv.total;
     }
     return data;
+  }
+
+  Map<DateTime, double> get dailyProfit {
+    final Map<DateTime, double> data = {};
+    for (var inv in _invoices.where((i) => !i.isEstimate)) {
+      final d = DateTime(inv.date.year, inv.date.month, inv.date.day);
+      double profit = inv.total;
+      for (var item in inv.items) {
+        profit -= (item.costPrice ?? 0) * item.quantity;
+      }
+      data[d] = (data[d] ?? 0) + profit;
+    }
+    return data;
+  }
+
+  // --- Multi-Period Chart Data ---
+
+  Map<int, double> getChartData(bool isProfit, bool isLastPeriod) {
+    final now = DateTime.now();
+    DateTime start;
+    DateTime lastStart;
+    int itemsCount;
+
+    switch (_chartPeriod) {
+      case ChartPeriod.daily:
+        start = DateTime(now.year, now.month, now.day);
+        lastStart = start.subtract(const Duration(days: 1));
+        itemsCount = 24;
+        break;
+      case ChartPeriod.weekly:
+        start = now.subtract(Duration(days: now.weekday - 1));
+        start = DateTime(start.year, start.month, start.day);
+        lastStart = start.subtract(const Duration(days: 7));
+        itemsCount = 7;
+        break;
+      case ChartPeriod.monthly:
+        start = DateTime(now.year, now.month, 1);
+        lastStart = DateTime(now.year, now.month - 1, 1);
+        itemsCount = DateTime(now.year, now.month + 1, 0).day;
+        break;
+      case ChartPeriod.yearly:
+        start = DateTime(now.year, 1, 1);
+        lastStart = DateTime(now.year - 1, 1, 1);
+        itemsCount = 12;
+        break;
+    }
+
+    final targetStart = isLastPeriod ? lastStart : start;
+    final Map<int, double> result = {};
+
+    for (var inv in _invoices.where((i) => !i.isEstimate)) {
+      bool inRange = false;
+      int key = 0;
+
+      if (_chartPeriod == ChartPeriod.yearly) {
+        if (inv.date.year == targetStart.year) {
+          inRange = true;
+          key = inv.date.month;
+        }
+      } else if (_chartPeriod == ChartPeriod.monthly) {
+        if (inv.date.year == targetStart.year && inv.date.month == targetStart.month) {
+          inRange = true;
+          key = inv.date.day;
+        }
+      } else if (_chartPeriod == ChartPeriod.weekly) {
+        final diff = inv.date.difference(targetStart).inDays;
+        if (diff >= 0 && diff < 7) {
+          inRange = true;
+          key = diff + 1;
+        }
+      } else if (_chartPeriod == ChartPeriod.daily) {
+        if (inv.date.year == targetStart.year && inv.date.month == targetStart.month && inv.date.day == targetStart.day) {
+          inRange = true;
+          key = inv.date.hour;
+        }
+      }
+
+      if (inRange) {
+        double val = inv.total;
+        if (isProfit) {
+          for (var item in inv.items) {
+            val -= (item.costPrice ?? 0) * item.quantity;
+          }
+        }
+        result[key] = (result[key] ?? 0) + val;
+      }
+    }
+
+    // Fill missing keys with 0
+    final startKey = (_chartPeriod == ChartPeriod.daily) ? 0 : 1;
+    final endKey = (_chartPeriod == ChartPeriod.daily) ? 23 : itemsCount;
+    for (int i = startKey; i <= endKey; i++) {
+      result[i] ??= 0;
+    }
+
+    return result;
   }
 
   List<Product> get lowStockProducts =>

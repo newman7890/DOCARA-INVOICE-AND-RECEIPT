@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/invoice.dart';
 
@@ -45,8 +46,77 @@ class SupabaseService {
     return res['id'] as String;
   }
 
-  Future<void> updateBusinessInfo(String businessId, Map<String, dynamic> info) async {
-    await _sb.from('businesses').update(info).eq('id', businessId);
+  Future<BusinessInfo?> getFullBusinessInfo(String businessId) async {
+    final res = await _sb
+        .from('businesses')
+        .select()
+        .eq('id', businessId)
+        .maybeSingle();
+    
+    if (res == null) return null;
+
+    return BusinessInfo(
+      name: res['name'] ?? '',
+      email: res['email'] ?? '',
+      phone: res['phone'] ?? '',
+      address: res['address'] ?? '',
+      logoPath: res['logo_url'], // We store URLs in DB
+      signaturePath: res['signature_url'],
+      revenueGoal: (res['revenue_goal'] ?? 0.0).toDouble(),
+      currency: res['currency'] ?? '₵',
+      terms: res['terms'],
+      pdfTermsLabel: res['pdf_terms_label'],
+      pdfSignatureLabel: res['pdf_signature_label'],
+      pdfTemplate: PdfTemplate.values[res['pdf_template'] ?? 0],
+      managerPin: res['manager_pin'] ?? '1234',
+    );
+  }
+
+  Future<void> updateBusinessInfo(String businessId, BusinessInfo info) async {
+    final data = {
+      'name': info.name,
+      'email': info.email,
+      'phone': info.phone,
+      'address': info.address,
+      'revenue_goal': info.revenueGoal,
+      'currency': info.currency,
+      'terms': info.terms,
+      'pdf_terms_label': info.pdfTermsLabel,
+      'pdf_signature_label': info.pdfSignatureLabel,
+      'pdf_template': info.pdfTemplate.index,
+      'manager_pin': info.managerPin,
+    };
+
+    // Note: logo_url and signature_url are handled separately via upload
+    if (info.logoPath != null && (info.logoPath!.startsWith('http') || info.logoPath!.isEmpty)) {
+       data['logo_url'] = info.logoPath;
+    }
+    if (info.signaturePath != null && (info.signaturePath!.startsWith('http') || info.signaturePath!.isEmpty)) {
+       data['signature_url'] = info.signaturePath;
+    }
+
+    await _sb.from('businesses').update(data).eq('id', businessId);
+  }
+
+  Future<String?> uploadBusinessAsset(String businessId, String localPath, String fileName) async {
+    try {
+      final file = File(localPath);
+      if (!await file.exists()) return null;
+
+      final path = '$businessId/$fileName';
+      
+      // Upload with upsert
+      await _sb.storage.from('business_assets').upload(
+        path,
+        file,
+        fileOptions: const FileOptions(upsert: true),
+      );
+
+      // Get public URL
+      return _sb.storage.from('business_assets').getPublicUrl(path);
+    } catch (e) {
+      return null;
+    }
   }
 
   // ─── Staff ──────────────────────────────────────────────

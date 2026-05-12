@@ -8,6 +8,8 @@ enum PaymentMethod { cash, momo, transfer }
 
 enum PdfTemplate { sidebar, classic, minimalist }
 
+enum ChartPeriod { daily, weekly, monthly, yearly }
+
 class BusinessInfo {
   final String name;
   final String email;

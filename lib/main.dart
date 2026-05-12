@@ -22,8 +22,12 @@ void main() async {
   runApp(
     MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (_) => SettingsProvider()),
         ChangeNotifierProvider(create: (_) => AuthProvider()),
+        ChangeNotifierProxyProvider<AuthProvider, SettingsProvider>(
+          create: (_) => SettingsProvider(),
+          update: (ctx, auth, settings) => settings!
+            ..updateBusinessConfig(auth.businessId),
+        ),
         ChangeNotifierProxyProvider<AuthProvider, InvoiceProvider>(
           create: (_) => InvoiceProvider(),
           update: (ctx, auth, invoice) => invoice!

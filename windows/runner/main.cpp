@@ -1,4 +1,3 @@
-#include <string>
 #include <windows.h>
 
 #include <flutter/dart_project.h>
