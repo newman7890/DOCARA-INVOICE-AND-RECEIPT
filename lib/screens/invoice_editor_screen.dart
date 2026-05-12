@@ -8,6 +8,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../models/invoice.dart';
 import '../providers/invoice_provider.dart';
 import '../providers/settings_provider.dart';
+import '../services/payment_service.dart';
 import 'pdf_preview_screen.dart';
 
 class InvoiceEditorScreen extends StatefulWidget {
@@ -477,7 +478,7 @@ class _InvoiceEditorScreenState extends State<InvoiceEditorScreen> {
           ),
         ),
       ),
-      bottomNavigationBar: _buildBottomBar(invoice, currency),
+      bottomNavigationBar: _buildBottomBar(invoice, currency, settings),
     );
   }
 
@@ -963,7 +964,7 @@ class _InvoiceEditorScreenState extends State<InvoiceEditorScreen> {
     );
   }
 
-  Widget _buildBottomBar(Invoice invoice, String currency) {
+  Widget _buildBottomBar(Invoice invoice, String currency, SettingsProvider settingsProv) {
     bool isPaid = invoice.amountPaid >= invoice.total && invoice.total > 0;
     return Container(
       padding: const EdgeInsets.all(20),
@@ -995,15 +996,64 @@ class _InvoiceEditorScreenState extends State<InvoiceEditorScreen> {
             ],
           ),
           const Spacer(),
-          ElevatedButton.icon(
-            onPressed: _preview,
-            icon: const Icon(Icons.visibility_outlined, size: 20),
-            label: const Text('PREVIEW PDF', style: TextStyle(fontWeight: FontWeight.bold)),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF1E3A8A),
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          if (settingsProv.businessInfo?.isPaymentEnabled == true) ...[
+            Flexible(
+              flex: 2,
+              child: ElevatedButton.icon(
+                onPressed: () async {
+                  final paymentService = PaymentService.getService(settingsProv.businessInfo!);
+                  final success = await paymentService.processPayment(
+                    amount: invoice.total,
+                    currency: currency,
+                    customerEmail: invoice.clientInfo.contact,
+                    invoiceId: invoice.id,
+                    context: context,
+                  );
+
+                  if (!mounted) return;
+
+                  if (success) {
+                    context.read<InvoiceProvider>().updateAmountPaid(invoice.total);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Payment Successful! Invoice updated.'),
+                        backgroundColor: Colors.green,
+                      ),
+                    );
+                  }
+                },
+                icon: const Icon(Icons.payment_outlined, size: 18),
+                label: Text(
+                  'PAY ${settingsProv.businessInfo?.paymentGateway.name.toUpperCase()}',
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF22C55E),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+          ],
+          Flexible(
+            flex: 2,
+            child: ElevatedButton.icon(
+              onPressed: _preview,
+              icon: const Icon(Icons.visibility_outlined, size: 18),
+              label: const Text(
+                'PREVIEW',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                overflow: TextOverflow.ellipsis,
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1E3A8A),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              ),
             ),
           ),
         ],

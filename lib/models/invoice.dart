@@ -8,6 +8,8 @@ enum PaymentMethod { cash, momo, transfer }
 
 enum PdfTemplate { sidebar, classic, minimalist }
 
+enum PaymentGateway { none, stripe, paystack, paypal }
+
 enum ChartPeriod { daily, weekly, monthly, yearly }
 
 class BusinessInfo {
@@ -27,6 +29,11 @@ class BusinessInfo {
   final String? pdfSignatureLabel;
   final PdfTemplate pdfTemplate;
   final String? managerPin;
+  final PaymentGateway paymentGateway;
+  final String gatewayPublicKey;
+  final String gatewaySecretKey;
+  final bool isPaymentEnabled;
+  final bool isLiveMode;
 
   BusinessInfo({
     required this.name,
@@ -45,6 +52,11 @@ class BusinessInfo {
     this.pdfSignatureLabel,
     this.pdfTemplate = PdfTemplate.sidebar,
     this.managerPin = '1234',
+    this.paymentGateway = PaymentGateway.none,
+    this.gatewayPublicKey = '',
+    this.gatewaySecretKey = '',
+    this.isPaymentEnabled = false,
+    this.isLiveMode = false,
   });
 
   Map<String, dynamic> toMap() {
@@ -65,6 +77,11 @@ class BusinessInfo {
       'pdfSignatureLabel': pdfSignatureLabel,
       'pdfTemplate': pdfTemplate.index,
       'managerPin': managerPin,
+      'paymentGateway': paymentGateway.index,
+      'gatewayPublicKey': gatewayPublicKey,
+      'gatewaySecretKey': gatewaySecretKey,
+      'isPaymentEnabled': isPaymentEnabled,
+      'isLiveMode': isLiveMode,
     };
   }
 
@@ -86,6 +103,11 @@ class BusinessInfo {
       pdfSignatureLabel: map['pdfSignatureLabel'],
       pdfTemplate: PdfTemplate.values[map['pdfTemplate'] ?? 0],
       managerPin: map['managerPin'],
+      paymentGateway: PaymentGateway.values[map['paymentGateway'] ?? 0],
+      gatewayPublicKey: map['gatewayPublicKey'] ?? '',
+      gatewaySecretKey: map['gatewaySecretKey'] ?? '',
+      isPaymentEnabled: map['isPaymentEnabled'] ?? false,
+      isLiveMode: map['isLiveMode'] ?? false,
     );
   }
 
@@ -106,6 +128,11 @@ class BusinessInfo {
     String? pdfSignatureLabel,
     PdfTemplate? pdfTemplate,
     String? managerPin,
+    PaymentGateway? paymentGateway,
+    String? gatewayPublicKey,
+    String? gatewaySecretKey,
+    bool? isPaymentEnabled,
+    bool? isLiveMode,
   }) {
     return BusinessInfo(
       name: name ?? this.name,
@@ -124,6 +151,11 @@ class BusinessInfo {
       pdfSignatureLabel: pdfSignatureLabel ?? this.pdfSignatureLabel,
       pdfTemplate: pdfTemplate ?? this.pdfTemplate,
       managerPin: managerPin ?? this.managerPin,
+      paymentGateway: paymentGateway ?? this.paymentGateway,
+      gatewayPublicKey: gatewayPublicKey ?? this.gatewayPublicKey,
+      gatewaySecretKey: gatewaySecretKey ?? this.gatewaySecretKey,
+      isPaymentEnabled: isPaymentEnabled ?? this.isPaymentEnabled,
+      isLiveMode: isLiveMode ?? this.isLiveMode,
     );
   }
 
