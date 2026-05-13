@@ -33,7 +33,7 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
   late TextEditingController _managerPinController;
   String? _logoPath;
   String? _signaturePath;
-  String _selectedCurrency = '\u20B5';
+  String _selectedCurrency = 'GHS';
   late SignatureController _signatureController;
   bool _isSigning = false;
   late PdfTemplate _selectedTemplate;
@@ -577,14 +577,21 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
           value: _selectedCurrency,
           isExpanded: true,
           icon: const Icon(Icons.keyboard_arrow_down, color: Colors.grey),
-          items: <String>['\u20B5', '\$', '\u00A3', '\u20AC', '\u20A6'].map((val) {
+          items: <String>['GHS', 'USD', 'GBP', 'EUR', 'NGN'].map((val) {
+            String symbol = val;
+            if (val == 'GHS') symbol = '₵';
+            if (val == 'USD') symbol = '\$';
+            if (val == 'GBP') symbol = '\u00A3';
+            if (val == 'EUR') symbol = '\u20AC';
+            if (val == 'NGN') symbol = '\u20A6';
+
             return DropdownMenuItem<String>(
               value: val,
               child: Row(
                 children: [
                   const Icon(Icons.monetization_on_outlined, color: Color(0xFF1E293B), size: 20),
                   const SizedBox(width: 12),
-                  Text(val, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
+                  Text('$symbol ($val)', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
                 ],
               ),
             );
