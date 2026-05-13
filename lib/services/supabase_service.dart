@@ -68,7 +68,7 @@ class SupabaseService {
       pdfTermsLabel: res['pdf_terms_label'],
       pdfSignatureLabel: res['pdf_signature_label'],
       pdfTemplate: PdfTemplate.values[res['pdf_template'] ?? 0],
-      managerPin: res['manager_pin'] ?? '1234',
+      // managerPin: res['manager_pin'] ?? '1234', // Column might be missing in DB
     );
   }
 
@@ -84,7 +84,7 @@ class SupabaseService {
       'pdf_terms_label': info.pdfTermsLabel,
       'pdf_signature_label': info.pdfSignatureLabel,
       'pdf_template': info.pdfTemplate.index,
-      'manager_pin': info.managerPin,
+      // 'manager_pin': info.managerPin, // Column missing in DB schema cache
     };
 
     // Note: logo_url and signature_url are handled separately via upload
