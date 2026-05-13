@@ -8,7 +8,6 @@ import 'package:permission_handler/permission_handler.dart';
 import '../models/invoice.dart';
 import '../providers/invoice_provider.dart';
 import '../providers/settings_provider.dart';
-import '../services/payment_service.dart';
 import 'pdf_preview_screen.dart';
 
 class InvoiceEditorScreen extends StatefulWidget {

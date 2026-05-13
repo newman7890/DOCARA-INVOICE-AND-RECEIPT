@@ -37,11 +37,6 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
   late SignatureController _signatureController;
   bool _isSigning = false;
   late PdfTemplate _selectedTemplate;
-  late PaymentGateway _selectedGateway;
-  late TextEditingController _publicKeyController;
-  late TextEditingController _secretKeyController;
-  bool _isPaymentEnabled = false;
-  bool _isLiveMode = false;
 
   @override
   void initState() {
@@ -59,18 +54,7 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
     _managerPinController = TextEditingController(text: biz?.managerPin ?? '1234');
     _logoPath = biz?.logoPath;
     _signaturePath = biz?.signaturePath;
-    _selectedCurrency = biz?.currency ?? 'GHS';
-    // Migrate old symbols to ISO codes
-    if (_selectedCurrency == '\u20B5' || _selectedCurrency == '₵') _selectedCurrency = 'GHS';
-    if (_selectedCurrency == '\$') _selectedCurrency = 'USD';
-    if (_selectedCurrency == '\u20A6' || _selectedCurrency == '₦') _selectedCurrency = 'NGN';
-    
     _selectedTemplate = biz?.pdfTemplate ?? PdfTemplate.sidebar;
-    _selectedGateway = biz?.paymentGateway ?? PaymentGateway.none;
-    _publicKeyController = TextEditingController(text: biz?.gatewayPublicKey);
-    _secretKeyController = TextEditingController(text: biz?.gatewaySecretKey);
-    _isPaymentEnabled = biz?.isPaymentEnabled ?? false;
-    _isLiveMode = biz?.isLiveMode ?? false;
     
     _signatureController = SignatureController(
       penStrokeWidth: 3,
@@ -90,8 +74,6 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
     _signatureLabelController.dispose();
     _termsContentController.dispose();
     _managerPinController.dispose();
-    _publicKeyController.dispose();
-    _secretKeyController.dispose();
     _signatureController.dispose();
     super.dispose();
   }
@@ -179,11 +161,6 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
           pdfSignatureLabel: _signatureLabelController.text,
           pdfTemplate: _selectedTemplate,
           managerPin: _managerPinController.text,
-          paymentGateway: _selectedGateway,
-          gatewayPublicKey: _publicKeyController.text,
-          gatewaySecretKey: _secretKeyController.text,
-          isPaymentEnabled: _isPaymentEnabled,
-          isLiveMode: _isLiveMode,
         );
         
         await settingsProvider.updateBusinessInfo(info);
@@ -446,43 +423,7 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
               const SizedBox(height: 16),
               _buildSignatureBox(),
  
-              const SizedBox(height: 40),
-              _buildSectionHeader('Payment Integration (SaaS)'),
-              const Text('Connect your payment gateway to accept card and mobile money payments directly.', style: TextStyle(fontSize: 11, color: Colors.grey)),
-              const SizedBox(height: 16),
-              
-              const Text('Payment Provider', style: TextStyle(fontSize: 11, color: Colors.grey, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 8),
-              _buildGatewayDropdown(),
-              const SizedBox(height: 20),
-
-              if (_selectedGateway != PaymentGateway.none) ...[
-                _buildCustomField('Gateway Public Key', _publicKeyController, Icons.vpn_key_outlined),
-                _buildCustomField('Gateway Secret Key', _secretKeyController, Icons.lock_person_outlined, isPassword: true),
-                Row(
-                  children: [
-                    Expanded(
-                      child: SwitchListTile(
-                        title: const Text('Enable Payments', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
-                        subtitle: const Text('Allow customers to pay via gateway', style: TextStyle(fontSize: 11)),
-                        value: _isPaymentEnabled,
-                        onChanged: (val) => setState(() => _isPaymentEnabled = val),
-                        contentPadding: EdgeInsets.zero,
-                      ),
-                    ),
-                    Expanded(
-                      child: SwitchListTile(
-                        title: const Text('Live Mode', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
-                        subtitle: const Text('Switch between Test and Real money', style: TextStyle(fontSize: 11)),
-                        value: _isLiveMode,
-                        onChanged: (val) => setState(() => _isLiveMode = val),
-                        contentPadding: EdgeInsets.zero,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 20),
-              ],
+              const SizedBox(height: 24),
 
               const SizedBox(height: 40),
               _buildActionButton(Icons.download_outlined, 'Export Invoices to CSV', _exportInvoicesToCSV),
@@ -611,50 +552,6 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
     );
   }
 
-  Widget _buildGatewayDropdown() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.02),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<PaymentGateway>(
-          value: _selectedGateway,
-          isExpanded: true,
-          icon: const Icon(Icons.keyboard_arrow_down, color: Colors.grey),
-          items: PaymentGateway.values.map((val) {
-            return DropdownMenuItem<PaymentGateway>(
-              value: val,
-              child: Row(
-                children: [
-                  Icon(
-                    val == PaymentGateway.none ? Icons.money_off_outlined : Icons.account_balance_outlined, 
-                    color: const Color(0xFF1E293B), 
-                    size: 20
-                  ),
-                  const SizedBox(width: 12),
-                  Text(val.name.toUpperCase(), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
-                ],
-              ),
-            );
-          }).toList(),
-          onChanged: (val) {
-            if (val != null) {
-              setState(() => _selectedGateway = val);
-            }
-          },
-        ),
-      ),
-    );
-  }
 
   Future<void> _saveSignature() async {
     if (_signatureController.isNotEmpty) {
