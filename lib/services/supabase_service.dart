@@ -49,7 +49,7 @@ class SupabaseService {
   Future<BusinessInfo?> getFullBusinessInfo(String businessId) async {
     final res = await _sb
         .from('businesses')
-        .select()
+        .select('name, email, phone, address, logo_url, signature_url, revenue_goal, currency')
         .eq('id', businessId)
         .maybeSingle();
     
@@ -64,12 +64,12 @@ class SupabaseService {
       signaturePath: res['signature_url'],
       revenueGoal: (res['revenue_goal'] ?? 0.0).toDouble(),
       currency: res['currency'] ?? '₵',
-      // The following fields might be missing in older DB schemas
-      terms: res['terms'] ?? 'Payment is due within 30 days.',
-      pdfTermsLabel: res['pdf_terms_label'] ?? 'Terms & Conditions',
-      pdfSignatureLabel: res['pdf_signature_label'] ?? 'Authorized Signature',
-      pdfTemplate: PdfTemplate.values[res['pdf_template'] ?? 0],
-      managerPin: res['manager_pin'] ?? '1234',
+      // The following fields are not synced to avoid schema mismatch
+      terms: 'Payment is due within 30 days.',
+      pdfTermsLabel: 'Terms & Conditions',
+      pdfSignatureLabel: 'Authorized Signature',
+      pdfTemplate: PdfTemplate.sidebar,
+      managerPin: '1234',
     );
   }
 
