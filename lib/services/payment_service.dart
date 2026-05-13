@@ -107,10 +107,23 @@ class PaystackService extends PaymentService {
         secretKey: businessInfo.gatewaySecretKey,
         email: customerEmail.isEmpty ? 'customer@example.com' : customerEmail,
         amount: (amount * 100).toDouble(),
-        currency: paystack.PaystackCurrency.values.firstWhere(
-          (e) => e.name.toLowerCase() == currency.toLowerCase(),
-          orElse: () => paystack.PaystackCurrency.ghs,
-        ),
+        currency: (() {
+          final cleanCurrency = currency.trim();
+          if (cleanCurrency == '₵' || cleanCurrency == '\u20B5') return paystack.PaystackCurrency.ghs;
+          if (cleanCurrency == '\$') return paystack.PaystackCurrency.usd;
+          if (cleanCurrency == '₦' || cleanCurrency == '\u20A6') return paystack.PaystackCurrency.ngn;
+          if (cleanCurrency == 'KES' || cleanCurrency == 'KSh') return paystack.PaystackCurrency.kes;
+          if (cleanCurrency == 'ZAR' || cleanCurrency == 'R') return paystack.PaystackCurrency.zar;
+          
+          try {
+            return paystack.PaystackCurrency.values.firstWhere(
+              (e) => e.name.toLowerCase() == cleanCurrency.toLowerCase() || 
+                     e.toString().split('.').last.toLowerCase() == cleanCurrency.toLowerCase(),
+            );
+          } catch (_) {
+            return paystack.PaystackCurrency.ghs;
+          }
+        })(),
         channel: [
           paystack.PaystackPaymentChannel.mobileMoney,
           paystack.PaystackPaymentChannel.card,
