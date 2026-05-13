@@ -995,48 +995,6 @@ class _InvoiceEditorScreenState extends State<InvoiceEditorScreen> {
             ],
           ),
           const Spacer(),
-          if (settingsProv.businessInfo?.isPaymentEnabled == true) ...[
-            Flexible(
-              flex: 2,
-              child: ElevatedButton.icon(
-                onPressed: () async {
-                  final paymentService = PaymentService.getService(settingsProv.businessInfo!);
-                  final success = await paymentService.processPayment(
-                    amount: invoice.total,
-                    currency: currency,
-                    customerEmail: invoice.clientInfo.contact,
-                    invoiceId: invoice.id,
-                    context: context,
-                  );
-
-                  if (!mounted) return;
-
-                  if (success) {
-                    context.read<InvoiceProvider>().updateAmountPaid(invoice.total);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Payment Successful! Invoice updated.'),
-                        backgroundColor: Colors.green,
-                      ),
-                    );
-                  }
-                },
-                icon: const Icon(Icons.payment_outlined, size: 18),
-                label: Text(
-                  'PAY ${settingsProv.businessInfo?.paymentGateway.name.toUpperCase()}',
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
-                  overflow: TextOverflow.ellipsis,
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF22C55E),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-          ],
           Flexible(
             flex: 2,
             child: ElevatedButton.icon(
