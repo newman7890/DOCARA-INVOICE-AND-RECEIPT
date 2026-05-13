@@ -59,7 +59,12 @@ class _BusinessProfileScreenState extends State<BusinessProfileScreen> {
     _managerPinController = TextEditingController(text: biz?.managerPin ?? '1234');
     _logoPath = biz?.logoPath;
     _signaturePath = biz?.signaturePath;
-    _selectedCurrency = biz?.currency ?? '\u20B5';
+    _selectedCurrency = biz?.currency ?? 'GHS';
+    // Migrate old symbols to ISO codes
+    if (_selectedCurrency == '\u20B5' || _selectedCurrency == '₵') _selectedCurrency = 'GHS';
+    if (_selectedCurrency == '\$') _selectedCurrency = 'USD';
+    if (_selectedCurrency == '\u20A6' || _selectedCurrency == '₦') _selectedCurrency = 'NGN';
+    
     _selectedTemplate = biz?.pdfTemplate ?? PdfTemplate.sidebar;
     _selectedGateway = biz?.paymentGateway ?? PaymentGateway.none;
     _publicKeyController = TextEditingController(text: biz?.gatewayPublicKey);
