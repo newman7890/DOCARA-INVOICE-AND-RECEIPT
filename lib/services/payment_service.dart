@@ -102,28 +102,30 @@ class PaystackService extends PaymentService {
     required BuildContext context,
   }) async {
     try {
+      final selectedCurrency = (() {
+        final cleanCurrency = currency.trim();
+        if (cleanCurrency == '₵' || cleanCurrency == '\u20B5') return paystack.PaystackCurrency.ghs;
+        if (cleanCurrency == '\$') return paystack.PaystackCurrency.usd;
+        if (cleanCurrency == '₦' || cleanCurrency == '\u20A6') return paystack.PaystackCurrency.ngn;
+        if (cleanCurrency == 'KES' || cleanCurrency == 'KSh') return paystack.PaystackCurrency.kes;
+        if (cleanCurrency == 'ZAR' || cleanCurrency == 'R') return paystack.PaystackCurrency.zar;
+        
+        try {
+          return paystack.PaystackCurrency.values.firstWhere(
+            (e) => e.name.toLowerCase() == cleanCurrency.toLowerCase() || 
+                   e.toString().split('.').last.toLowerCase() == cleanCurrency.toLowerCase(),
+          );
+        } catch (_) {
+          return paystack.PaystackCurrency.ghs;
+        }
+      })();
+
       final request = paystack.PaystackTransactionRequest(
         reference: 'INV-${invoiceId.replaceAll("-", "")}-${DateTime.now().millisecondsSinceEpoch}',
         secretKey: businessInfo.gatewaySecretKey,
         email: customerEmail.isEmpty ? 'customer@example.com' : customerEmail,
         amount: (amount * 100).toDouble(),
-        currency: (() {
-          final cleanCurrency = currency.trim();
-          if (cleanCurrency == '₵' || cleanCurrency == '\u20B5') return paystack.PaystackCurrency.ghs;
-          if (cleanCurrency == '\$') return paystack.PaystackCurrency.usd;
-          if (cleanCurrency == '₦' || cleanCurrency == '\u20A6') return paystack.PaystackCurrency.ngn;
-          if (cleanCurrency == 'KES' || cleanCurrency == 'KSh') return paystack.PaystackCurrency.kes;
-          if (cleanCurrency == 'ZAR' || cleanCurrency == 'R') return paystack.PaystackCurrency.zar;
-          
-          try {
-            return paystack.PaystackCurrency.values.firstWhere(
-              (e) => e.name.toLowerCase() == cleanCurrency.toLowerCase() || 
-                     e.toString().split('.').last.toLowerCase() == cleanCurrency.toLowerCase(),
-            );
-          } catch (_) {
-            return paystack.PaystackCurrency.ghs;
-          }
-        })(),
+        currency: selectedCurrency,
         channel: [
           paystack.PaystackPaymentChannel.mobileMoney,
           paystack.PaystackPaymentChannel.card,
@@ -135,7 +137,10 @@ class PaystackService extends PaymentService {
       if (!initializedTransaction.status) {
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Initialization Error: ${initializedTransaction.message}'), backgroundColor: Colors.red),
+            SnackBar(
+              content: Text('Initialization Error (${selectedCurrency.name.toUpperCase()}): ${initializedTransaction.message}'), 
+              backgroundColor: Colors.red
+            ),
           );
         }
         return false;
