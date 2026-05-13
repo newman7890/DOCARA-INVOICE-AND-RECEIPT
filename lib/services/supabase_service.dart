@@ -75,7 +75,7 @@ class SupabaseService {
 
   Future<void> updateBusinessInfo(String businessId, BusinessInfo info) async {
     // Only include columns we are CERTAIN exist in the DB schema
-    final data = {
+    final Map<String, dynamic> data = {
       'name': info.name,
       'email': info.email,
       'phone': info.phone,
