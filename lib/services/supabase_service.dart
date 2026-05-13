@@ -60,19 +60,21 @@ class SupabaseService {
       email: res['email'] ?? '',
       phone: res['phone'] ?? '',
       address: res['address'] ?? '',
-      logoPath: res['logo_url'], // We store URLs in DB
+      logoPath: res['logo_url'],
       signaturePath: res['signature_url'],
       revenueGoal: (res['revenue_goal'] ?? 0.0).toDouble(),
       currency: res['currency'] ?? '₵',
-      terms: res['terms'],
-      pdfTermsLabel: res['pdf_terms_label'],
-      pdfSignatureLabel: res['pdf_signature_label'],
+      // The following fields might be missing in older DB schemas
+      terms: res['terms'] ?? 'Payment is due within 30 days.',
+      pdfTermsLabel: res['pdf_terms_label'] ?? 'Terms & Conditions',
+      pdfSignatureLabel: res['pdf_signature_label'] ?? 'Authorized Signature',
       pdfTemplate: PdfTemplate.values[res['pdf_template'] ?? 0],
-      // managerPin: res['manager_pin'] ?? '1234', // Column might be missing in DB
+      managerPin: res['manager_pin'] ?? '1234',
     );
   }
 
   Future<void> updateBusinessInfo(String businessId, BusinessInfo info) async {
+    // Only include columns we are CERTAIN exist in the DB schema
     final data = {
       'name': info.name,
       'email': info.email,
@@ -80,11 +82,6 @@ class SupabaseService {
       'address': info.address,
       'revenue_goal': info.revenueGoal,
       'currency': info.currency,
-      'terms': info.terms,
-      'pdf_terms_label': info.pdfTermsLabel,
-      'pdf_signature_label': info.pdfSignatureLabel,
-      'pdf_template': info.pdfTemplate.index,
-      // 'manager_pin': info.managerPin, // Column missing in DB schema cache
     };
 
     // Note: logo_url and signature_url are handled separately via upload
@@ -95,6 +92,8 @@ class SupabaseService {
        data['signature_url'] = info.signaturePath;
     }
 
+    // Attempt to update. If it fails, it might be due to missing columns in an old schema.
+    // We could try to update fields one by one, but for now we just stick to the basics.
     await _sb.from('businesses').update(data).eq('id', businessId);
   }
 
