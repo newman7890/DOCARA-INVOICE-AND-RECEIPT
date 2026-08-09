@@ -83,6 +83,39 @@ class _InvoiceEditorScreenState extends State<InvoiceEditorScreen> {
     return false; // let the event pass through to text fields
   }
 
+  void _handleBack(BuildContext context) async {
+    final provider = context.read<InvoiceProvider>();
+    final invoice = provider.currentInvoice;
+    
+    // If it's a real sale (not estimate) with items, and it hasn't been saved yet (stockReduced is false)
+    if (invoice != null && !invoice.isEstimate && invoice.items.isNotEmpty && !invoice.stockReduced) {
+      final result = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Finalize Sale?'),
+          content: const Text('You have added items but haven\'t saved this sale yet (stock count hasn\'t been updated). Would you like to save it now?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, true), // Discard
+              child: const Text('DISCARD', style: TextStyle(color: Colors.red)),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                _preview(); // This saves and opens preview
+                Navigator.pop(context, false); // Stay in the app, preview screen is now on top
+              },
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E3A8A), foregroundColor: Colors.white),
+              child: const Text('SAVE & PREVIEW'),
+            ),
+          ],
+        ),
+      );
+      if (result == true && context.mounted) Navigator.pop(context);
+    } else {
+      Navigator.pop(context);
+    }
+  }
+
   void _addItem() {
     final currency = context.read<SettingsProvider>().businessInfo?.currency ?? '₵';
     showDialog(
@@ -241,6 +274,8 @@ class _InvoiceEditorScreenState extends State<InvoiceEditorScreen> {
         name: product.name,
         quantity: 1,
         sellingPrice: product.price,
+        costPrice: product.costPrice,
+        productId: product.id,
       ));
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Added: ${product.name}')),
@@ -296,6 +331,8 @@ class _InvoiceEditorScreenState extends State<InvoiceEditorScreen> {
                         name: newProduct.name,
                         quantity: 1,
                         sellingPrice: newProduct.price,
+                        costPrice: newProduct.costPrice,
+                        productId: newProduct.id,
                       ));
                       Navigator.pop(context);
                       ScaffoldMessenger.of(context).showSnackBar(
@@ -315,7 +352,7 @@ class _InvoiceEditorScreenState extends State<InvoiceEditorScreen> {
 
 
 
-  void _preview() {
+  Future<void> _preview() async {
     // Update client info and ID in provider before navigating
     final provider = context.read<InvoiceProvider>();
     provider.updateClientInfo(
@@ -329,8 +366,9 @@ class _InvoiceEditorScreenState extends State<InvoiceEditorScreen> {
     if (provider.currentInvoice?.id != _invoiceIdController.text) {
       provider.updateInvoice(provider.currentInvoice!.copyWith(id: _invoiceIdController.text));
     }
-    provider.saveCurrentInvoice();
+    await provider.saveCurrentInvoice();
     
+    if (!mounted) return;
     Navigator.push(context, MaterialPageRoute(builder: (_) => const PdfPreviewScreen()));
   }
 
@@ -349,42 +387,71 @@ class _InvoiceEditorScreenState extends State<InvoiceEditorScreen> {
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (context) => Container(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('Product Catalog', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 16),
-            Flexible(
-              child: ListView.separated(
-                shrinkWrap: true,
-                itemCount: products.length,
-                separatorBuilder: (context, index) => const Divider(),
-                itemBuilder: (context, index) {
-                  final p = products[index];
-                  return ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: Text(p.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-                    trailing: Text('$currency${p.price.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFF1E3A8A), fontWeight: FontWeight.bold)),
-                    onTap: () {
-                      provider.addItem(InvoiceItem(
-                        name: p.name, 
-                        quantity: 1, 
-                        sellingPrice: p.price,
-                        costPrice: p.costPrice,
-                      ));
-                      Navigator.pop(context);
-                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Added ${p.name}')));
-                    },
-                  );
-                },
+      builder: (context) {
+        String searchQuery = '';
+        return StatefulBuilder(
+          builder: (context, setState) {
+            final filteredProducts = products.where((p) {
+              final query = searchQuery.toLowerCase();
+              return p.name.toLowerCase().contains(query) || 
+                     (p.barcode != null && p.barcode!.toLowerCase().contains(query));
+            }).toList();
+
+            return Container(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('Product Catalog', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 12),
+                  TextField(
+                    decoration: InputDecoration(
+                      hintText: 'Search products...',
+                      prefixIcon: const Icon(Icons.search),
+                      contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onChanged: (value) => setState(() => searchQuery = value),
+                  ),
+                  const SizedBox(height: 16),
+                  Flexible(
+                    child: filteredProducts.isEmpty 
+                      ? const Center(child: Padding(
+                          padding: EdgeInsets.all(16.0),
+                          child: Text('No products found.'),
+                        ))
+                      : ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: filteredProducts.length,
+                      separatorBuilder: (context, index) => const Divider(),
+                      itemBuilder: (context, index) {
+                        final p = filteredProducts[index];
+                        return ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: Text(p.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                          trailing: Text('$currency${p.price.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFF1E3A8A), fontWeight: FontWeight.bold)),
+                          onTap: () {
+                            provider.addItem(InvoiceItem(
+                              name: p.name, 
+                              quantity: 1, 
+                              sellingPrice: p.price,
+                              costPrice: p.costPrice,
+                              productId: p.id,
+                            ));
+                            Navigator.pop(context);
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Added ${p.name}')));
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ],
               ),
-            ),
-          ],
-        ),
-      ),
+            );
+          }
+        );
+      },
     );
   }
 
@@ -405,7 +472,7 @@ class _InvoiceEditorScreenState extends State<InvoiceEditorScreen> {
         systemOverlayStyle: SystemUiOverlayStyle.dark,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Color(0xFF1E3A8A)),
-          onPressed: () => Navigator.pop(context),
+          onPressed: () => _handleBack(context),
         ),
         centerTitle: true,
         title: Text(
@@ -547,62 +614,106 @@ class _InvoiceEditorScreenState extends State<InvoiceEditorScreen> {
         color: Colors.white,
         borderRadius: BorderRadius.circular(24),
       ),
-      child: Row(
+      child: Column(
         children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Number', style: TextStyle(fontSize: 10, color: Colors.grey, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 4),
-                _buildSimpleField('Invoice No.', _invoiceIdController),
-              ],
-            ),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Date', style: TextStyle(fontSize: 10, color: Colors.grey, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 4),
-                InkWell(
-                  onTap: () async {
-                    // Anti-Fraud: Only Admin can back-date or forward-date invoices
-                    if (provider.activeStaff != null) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Staff cannot change invoice dates. Only Admin can edit dates.')),
-                      );
-                      return;
-                    }
-                    
-                    final picked = await showDatePicker(
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Number', style: TextStyle(fontSize: 10, color: Colors.grey, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 4),
+                    _buildSimpleField('Invoice No.', _invoiceIdController),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Issue Date', style: TextStyle(fontSize: 10, color: Colors.grey, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 4),
+                    _buildDateSelector(
                       context: context,
-                      initialDate: invoice.date,
-                      firstDate: DateTime(2000),
-                      lastDate: DateTime(2100),
-                    );
-                    if (picked != null) {
-                      provider.updateInvoice(invoice.copyWith(date: picked));
-                    }
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF8FAFC),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: const Color(0xFFF1F5F9)),
+                      date: invoice.date,
+                      isStaff: provider.activeStaff != null,
+                      onDatePicked: (picked) => provider.updateInvoice(invoice.copyWith(date: picked)),
                     ),
-                    child: Text(
-                      DateFormat('dd MMM yyyy').format(invoice.date),
-                      style: const TextStyle(fontSize: 14, color: Color(0xFF1E293B)),
-                    ),
-                  ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (invoice.type == InvoiceType.invoice || invoice.isEstimate) ...[
+            const SizedBox(height: 16),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Due Date', style: TextStyle(fontSize: 10, color: Colors.grey, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 4),
+                _buildDateSelector(
+                  context: context,
+                  date: invoice.dueDate ?? invoice.date.add(const Duration(days: 7)),
+                  isStaff: provider.activeStaff != null,
+                  onDatePicked: (picked) => provider.updateInvoice(invoice.copyWith(dueDate: picked)),
                 ),
               ],
             ),
-          ),
+          ],
         ],
+      ),
+    );
+  }
+
+  Widget _buildDateSelector({
+    required BuildContext context,
+    required DateTime date,
+    required bool isStaff,
+    required Function(DateTime) onDatePicked,
+  }) {
+    return InkWell(
+      onTap: () async {
+        if (isStaff) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Staff cannot change dates. Only Admin can edit dates.')),
+          );
+          return;
+        }
+        
+        final picked = await showDatePicker(
+          context: context,
+          initialDate: date,
+          firstDate: DateTime(2000),
+          lastDate: DateTime(2100),
+        );
+        if (picked != null) {
+          onDatePicked(picked);
+        }
+      },
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF8FAFC),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFFF1F5F9)),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.calendar_today_outlined, size: 14, color: Color(0xFF1E3A8A)),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                DateFormat('dd MMM yyyy').format(date),
+                style: const TextStyle(fontSize: 13, color: Color(0xFF1E293B)),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -757,7 +868,7 @@ class _InvoiceEditorScreenState extends State<InvoiceEditorScreen> {
       itemBuilder: (context, index) {
         final item = items[index];
         return Container(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(16),
@@ -773,13 +884,50 @@ class _InvoiceEditorScreenState extends State<InvoiceEditorScreen> {
                   children: [
                     Text(item.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
                     const SizedBox(height: 4),
-                    Text('${item.quantity} x $currency${item.sellingPrice.toStringAsFixed(2)}', style: TextStyle(color: Colors.grey[500], fontSize: 12)),
+                    Text('$currency${item.sellingPrice.toStringAsFixed(2)}', style: TextStyle(color: Colors.grey[500], fontSize: 12)),
                   ],
                 ),
               ),
-              Text('$currency${item.total.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-              const SizedBox(width: 8),
-              IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: () => provider.removeItem(index)),
+              Row(
+                children: [
+                  Container(
+                    height: 32,
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.grey[300]!),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      children: [
+                        IconButton(
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(minWidth: 32),
+                          icon: const Icon(Icons.remove, size: 16),
+                          onPressed: () => provider.updateItemQuantity(index, item.quantity - 1),
+                        ),
+                        Text('${item.quantity}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                        IconButton(
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(minWidth: 32),
+                          icon: const Icon(Icons.add, size: 16),
+                          onPressed: () => provider.updateItemQuantity(index, item.quantity + 1),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  SizedBox(
+                    width: 70,
+                    child: Text('$currency${item.total.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14), textAlign: TextAlign.right),
+                  ),
+                  const SizedBox(width: 4),
+                  IconButton(
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 36),
+                    icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), 
+                    onPressed: () => provider.removeItem(index),
+                  ),
+                ],
+              ),
             ],
           ),
         );
@@ -1001,7 +1149,7 @@ class _InvoiceEditorScreenState extends State<InvoiceEditorScreen> {
               onPressed: _preview,
               icon: const Icon(Icons.visibility_outlined, size: 18),
               label: const Text(
-                'PREVIEW',
+                'SAVE & PREVIEW',
                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
                 overflow: TextOverflow.ellipsis,
               ),
@@ -1034,7 +1182,7 @@ class _InvoiceEditorScreenState extends State<InvoiceEditorScreen> {
         children: [
           _buildSettingsField(
             'Subtitle / Terms',
-            biz.posSubtitle ?? biz.terms ?? '',
+            biz.posSubtitle ?? '',
             'e.g. Thank you for your business!',
             (v) => settings.updateBusinessInfo(biz.copyWith(posSubtitle: v)),
           ),

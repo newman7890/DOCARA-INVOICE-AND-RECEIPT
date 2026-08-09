@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/invoice.dart';
 
@@ -19,12 +20,30 @@ class SupabaseService {
   Future<AuthResponse> signUp(String email, String password) =>
       _sb.auth.signUp(email: email, password: password);
 
-  Future<void> resetPassword(String email) => 
-      _sb.auth.resetPasswordForEmail(email, redirectTo: 'io.supabase.docara://reset-password/');
+  Future<void> resetPassword(String email) =>
+      _sb.auth.resetPasswordForEmail(email, redirectTo: 'io.supabase.docara://reset-password');
 
   Future<void> signOut() => _sb.auth.signOut();
 
+  Future<void> updatePassword(String newPassword) =>
+      _sb.auth.updateUser(UserAttributes(password: newPassword));
+
   Stream<AuthState> get authStateChanges => _sb.auth.onAuthStateChange;
+
+  // ─── App Metadata ───────────────────────────────────────
+  Future<Map<String, dynamic>?> getLatestVersion() async {
+    try {
+      final response = await _sb
+          .from('app_metadata')
+          .select('value, download_url')
+          .eq('key', 'latest_version')
+          .maybeSingle();
+      return response;
+    } catch (e) {
+      debugPrint('Error fetching version: $e');
+      return null;
+    }
+  }
 
   // ─── Business ───────────────────────────────────────────
   Future<String?> getBusinessId() async {
@@ -184,12 +203,25 @@ class SupabaseService {
     });
   }
 
-  Future<void> decrementProductStock(String productId, int quantity) async {
-    await _sb.rpc('decrement_product_stock', params: {
-      'p_id': productId,
-      'p_quantity': quantity,
-    });
+  Future<bool> decrementProductStock(String productId, int quantity) async {
+    try {
+      await _sb.rpc('decrement_product_stock', params: {
+        'p_id': productId,
+        'p_quantity': quantity,
+      });
+      return true;
+    } catch (e) {
+      debugPrint('RPC decrement failed: $e');
+      return false;
+    }
   }
+
+  Future<void> updateProductStockOnly(String productId, int newQuantity) async {
+    await _sb.from('products').update({
+      'stock_quantity': newQuantity,
+    }).eq('id', productId);
+  }
+
 
   Future<void> deleteProduct(String productId) async {
     await _sb.from('products').delete().eq('id', productId);
@@ -224,6 +256,20 @@ class SupabaseService {
     await _sb.from('customers').delete().eq('id', customerId);
   }
 
+  Future<bool> incrementCustomerStats(String customerId, double amount, int count) async {
+    try {
+      await _sb.rpc('increment_customer_stats', params: {
+        'c_id': customerId,
+        'p_amount': amount,
+        'p_count': count,
+      });
+      return true;
+    } catch (e) {
+      debugPrint('Customer stats RPC failed: $e');
+      return false;
+    }
+  }
+
   // ─── Invoices ───────────────────────────────────────────
   Future<List<Invoice>> getInvoices(String businessId) async {
     final res = await _sb
@@ -240,6 +286,7 @@ class SupabaseService {
       quantity: item['quantity'],
       sellingPrice: (item['selling_price'] as num).toDouble(),
       costPrice: item['cost_price'] != null ? (item['cost_price'] as num).toDouble() : null,
+      productId: item['product_id'],
     )).toList();
 
     return Invoice(
@@ -262,6 +309,7 @@ class SupabaseService {
       isPos: e['is_pos'] ?? false,
       cashierName: e['cashier_name'],
       stationName: e['station_name'],
+      stockReduced: e['stock_reduced'] ?? false,
     );
   }
 
@@ -274,46 +322,54 @@ class SupabaseService {
   }
 
   Future<void> saveInvoice(String businessId, Invoice invoice, String stationName) async {
-    final data = {
-      'id': invoice.id,
+    await saveInvoicesBatch(businessId, [invoice], stationName);
+  }
+
+  Future<void> saveInvoicesBatch(String businessId, List<Invoice> invoices, String stationName) async {
+    if (invoices.isEmpty) return;
+
+    final invoiceData = invoices.map((inv) => {
+      'id': inv.id,
       'business_id': businessId,
-      'due_date': invoice.dueDate?.toIso8601String(),
-      'type': invoice.type.name,
-      'client_name': invoice.clientInfo.name,
-      'client_address': invoice.clientInfo.address,
-      'client_contact': invoice.clientInfo.contact,
-      'discount_value': invoice.discountValue,
-      'discount_type': invoice.discountType.name,
-      'tax_value': invoice.taxValue,
-      'amount_paid': invoice.amountPaid,
-      'payment_method': invoice.paymentMethod.name,
-      'is_estimate': invoice.isEstimate,
-      'is_pos': invoice.isPos,
-      'cashier_name': invoice.cashierName,
+      'date': inv.date.toIso8601String(),
+      'due_date': inv.dueDate?.toIso8601String(),
+      'type': inv.type.name,
+      'client_name': inv.clientInfo.name,
+      'client_address': inv.clientInfo.address,
+      'client_contact': inv.clientInfo.contact,
+      'discount_value': inv.discountValue,
+      'discount_type': inv.discountType.name,
+      'tax_value': inv.taxValue,
+      'amount_paid': inv.amountPaid,
+      'payment_method': inv.paymentMethod.name,
+      'is_estimate': inv.isEstimate,
+      'is_pos': inv.isPos,
+      'cashier_name': inv.cashierName,
       'station_name': stationName,
-    };
+      'stock_reduced': inv.stockReduced,
+    }).toList();
 
-    // Only include date if we are updating an existing record, 
-    // otherwise let the database handle it to prevent local time manipulation
-    if (invoice.id.contains('-') && !invoice.id.startsWith('INV-')) {
-       // This logic is a bit weak, but I'll add a comment
+    await _sb.from('invoices').upsert(invoiceData);
+
+    final List<Map<String, dynamic>> allItems = [];
+    final List<String> invoiceIds = [];
+    for (var inv in invoices) {
+      invoiceIds.add(inv.id);
+      for (var item in inv.items) {
+        allItems.add({
+          'invoice_id': inv.id,
+          'name': item.name,
+          'quantity': item.quantity,
+          'selling_price': item.sellingPrice,
+          'cost_price': item.costPrice,
+          'product_id': item.productId,
+        });
+      }
     }
-    
-    // Better way: Always send date for now, but rely on SQL for security in the walkthrough
-    data['date'] = invoice.date.toIso8601String();
 
-    await _sb.from('invoices').upsert(data);
-
-    // Replace items
-    await _sb.from('invoice_items').delete().eq('invoice_id', invoice.id);
-    if (invoice.items.isNotEmpty) {
-      await _sb.from('invoice_items').insert(invoice.items.map((item) => {
-        'invoice_id': invoice.id,
-        'name': item.name,
-        'quantity': item.quantity,
-        'selling_price': item.sellingPrice,
-        'cost_price': item.costPrice,
-      }).toList());
+    await _sb.from('invoice_items').delete().inFilter('invoice_id', invoiceIds);
+    if (allItems.isNotEmpty) {
+      await _sb.from('invoice_items').insert(allItems);
     }
   }
 

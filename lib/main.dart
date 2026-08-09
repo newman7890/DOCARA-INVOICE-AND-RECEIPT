@@ -8,6 +8,7 @@ import 'theme/app_theme.dart';
 import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/auth/signup_screen.dart';
+import 'screens/auth/reset_password_screen.dart';
 
 import 'config.dart';
 
@@ -42,14 +43,50 @@ void main() async {
   );
 }
 
-class DocaraApp extends StatelessWidget {
+class DocaraApp extends StatefulWidget {
   const DocaraApp({super.key});
+
+  @override
+  State<DocaraApp> createState() => _DocaraAppState();
+}
+
+class _DocaraAppState extends State<DocaraApp> {
+  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
+
+  @override
+  void initState() {
+    super.initState();
+    final auth = context.read<AuthProvider>();
+    // Listen for password recovery events to trigger redirect
+    auth.addListener(_handleAuthChanges);
+    
+    // Check if we are already in recovery mode on start
+    if (auth.isRecoveringPassword) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _handleAuthChanges());
+    }
+  }
+
+  @override
+  void dispose() {
+    context.read<AuthProvider>().removeListener(_handleAuthChanges);
+    super.dispose();
+  }
+
+  void _handleAuthChanges() {
+    if (!mounted) return;
+    final auth = context.read<AuthProvider>();
+    if (auth.isRecoveringPassword) {
+      debugPrint('Redirecting to Reset Password Screen...');
+      _navigatorKey.currentState?.pushNamedAndRemoveUntil('/reset-password', (route) => false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final settings = context.watch<SettingsProvider>();
 
     return MaterialApp(
+      navigatorKey: _navigatorKey,
       title: 'Docara Invoice & Receipt',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
@@ -60,6 +97,7 @@ class DocaraApp extends StatelessWidget {
         '/login': (_) => const LoginScreen(),
         '/home': (_) => const HomeScreen(),
         '/signup': (_) => const SignupScreen(),
+        '/reset-password': (_) => const ResetPasswordScreen(),
       },
     );
   }

@@ -1,11 +1,14 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:provider/provider.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:intl/intl.dart';
 import '../models/invoice.dart';
 import '../providers/invoice_provider.dart';
+import '../services/supabase_service.dart';
 import '../providers/settings_provider.dart';
 import '../providers/auth_provider.dart';
 import 'invoice_editor_screen.dart';
@@ -32,11 +35,85 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _activeTab = 0; // 0: Dashboard, 1: Documents, 2: Clients, 3: Inventory, 4: Expenses
   late PageController _pageController;
+  String _searchQuery = '';
+  bool _isExiting = false;
 
   @override
   void initState() {
     super.initState();
     _pageController = PageController(initialPage: _activeTab);
+    _checkForUpdates();
+  }
+
+  Future<void> _checkForUpdates() async {
+    // Wait a moment for the screen to settle
+    await Future.delayed(const Duration(seconds: 2));
+    
+    try {
+      final service = SupabaseService();
+      final latest = await service.getLatestVersion();
+      
+      if (latest == null) return;
+      
+      final packageInfo = await PackageInfo.fromPlatform();
+      final currentBuild = int.tryParse(packageInfo.buildNumber) ?? 0;
+      
+      final serverVersionString = latest['value'] as String;
+      final serverBuildStr = serverVersionString.contains('+') 
+          ? serverVersionString.split('+').last 
+          : '0';
+      final serverBuild = int.tryParse(serverBuildStr) ?? 0;
+      
+      final downloadUrl = latest['download_url'] as String?;
+
+      if (serverBuild > currentBuild && downloadUrl != null) {
+        if (!mounted) return;
+        _showUpdateDialog(serverVersionString, downloadUrl);
+      }
+    } catch (e) {
+      debugPrint('Update check failed: $e');
+    }
+  }
+
+  void _showUpdateDialog(String newVersion, String url) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(
+          children: [
+            Icon(Icons.system_update, color: Color(0xFF2563EB)),
+            SizedBox(width: 10),
+            Text('Update Available'),
+          ],
+        ),
+        content: Text(
+          'A new version ($newVersion) of Docara is available. Update now to get the latest features and fixes!',
+          style: const TextStyle(color: Color(0xFF64748B)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Later', style: TextStyle(color: Color(0xFF64748B))),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final uri = Uri.parse(url);
+              if (await canLaunchUrl(uri)) {
+                await launchUrl(uri, mode: LaunchMode.externalApplication);
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF2563EB),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            child: const Text('Download Now'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -50,7 +127,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _performTabChange(int index) {
-    setState(() => _activeTab = index);
+    setState(() {
+      _activeTab = index;
+      _searchQuery = '';
+    });
     _pageController.animateToPage(
       index,
       duration: const Duration(milliseconds: 300),
@@ -65,12 +145,18 @@ class _HomeScreenState extends State<HomeScreen> {
     final settings = context.watch<SettingsProvider>();
     final biz = settings.businessInfo;
 
+    // If we are exiting, show a clean background to prevent "Admin Flash"
+    if (_isExiting) {
+      return const Scaffold(backgroundColor: Color(0xFFF8FAFC));
+    }
+
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
       resizeToAvoidBottomInset: false,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
+        automaticallyImplyLeading: false,
         systemOverlayStyle: SystemUiOverlayStyle.dark,
         title: const Text(
           'Docara POS receipt and invoice',
@@ -82,16 +168,42 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         actions: [
           if (invoiceProvider.hasPendingSync)
-            IconButton(
-              icon: const Icon(Icons.cloud_off, color: Colors.redAccent),
-              tooltip: 'Offline Receipts Pending Sync',
-              onPressed: () async {
-                await invoiceProvider.syncOfflineInvoices();
-                if (context.mounted && !invoiceProvider.hasPendingSync) {
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('All offline receipts synced successfully!')));
-                }
-              },
-            ),
+            invoiceProvider.isLoading 
+              ? const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 12.0),
+                  child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.redAccent)),
+                )
+              : IconButton(
+                  icon: const Icon(Icons.cloud_off, color: Colors.redAccent),
+                  tooltip: 'Offline Receipts Pending Sync',
+                  onPressed: () async {
+                    final results = await invoiceProvider.syncOfflineInvoices();
+                    if (!context.mounted) return;
+                    
+                    if (results['success'] == results['total'] && results['total']! > 0) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('All offline receipts synced successfully!'),
+                          backgroundColor: Colors.green,
+                        )
+                      );
+                    } else if (results['success']! > 0) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Synced ${results['success']} of ${results['total']} receipts. Some failed.'),
+                          backgroundColor: Colors.orange,
+                        )
+                      );
+                    } else if (results['total']! > 0) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Sync failed: ${results['error'] ?? 'No internet'}'),
+                          backgroundColor: Colors.red,
+                        )
+                      );
+                    }
+                  },
+                ),
           IconButton(
             icon: const Icon(Icons.sync, color: Color(0xFF1E293B)),
             onPressed: () {
@@ -110,15 +222,19 @@ class _HomeScreenState extends State<HomeScreen> {
           IconButton(
             icon: const Icon(Icons.logout, color: Color(0xFF1E293B)),
             onPressed: () async {
-              final activeStaff = invoiceProvider.activeStaff;
-              if (activeStaff != null) {
-                // Just log out the cashier, keep admin session
-                await invoiceProvider.setActiveStaff(null);
-                if (context.mounted) Navigator.pushReplacementNamed(context, '/login');
-              } else {
-                // Full admin logout
-                await context.read<AuthProvider>().signOut();
-                if (context.mounted) Navigator.pushReplacementNamed(context, '/login');
+              // 1. Instantly hide the UI
+              setState(() => _isExiting = true);
+              
+              // 2. Perform logouts
+              final authProv = context.read<AuthProvider>();
+              final invoiceProv = context.read<InvoiceProvider>();
+              
+              await invoiceProv.setActiveStaff(null);
+              await authProv.signOut();
+              
+              // 3. Navigate to login
+              if (context.mounted) {
+                Navigator.pushReplacementNamed(context, '/login');
               }
             },
           ),
@@ -487,109 +603,155 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildTabContentItems(int tabIndex, InvoiceProvider provider) {
     String message = '';
     IconData icon = Icons.info_outline;
-    List<dynamic> items = [];
+    List<dynamic> sourceItems = [];
 
     if (tabIndex == 2) {
       message = 'No customers saved yet.';
       icon = Icons.people_outline;
-      items = provider.customers;
+      sourceItems = provider.customers;
     } else if (tabIndex == 3) {
       message = 'No products saved yet.';
       icon = Icons.inventory_2_outlined;
-      items = provider.products;
+      sourceItems = provider.products;
     } else if (tabIndex == 4) {
       message = 'No expenses recorded yet.';
       icon = Icons.money_off_outlined;
-      items = provider.expenses;
+      sourceItems = provider.expenses;
     }
 
-    if (items.isNotEmpty) {
-      return ListView.separated(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        itemCount: items.length,
-        separatorBuilder: (context, index) => const SizedBox(height: 10),
-        itemBuilder: (context, index) {
-          final item = items[index];
-          if (item is Customer) {
-            return GestureDetector(
-              onTap: () => _showCustomerOptions(context, item),
-              child: Card(
-                elevation: 0,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                  side: BorderSide(color: Colors.grey[100]!),
-                ),
-                child: ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor: const Color(0xFFEEF2FF),
-                    child: const Icon(Icons.person, color: Color(0xFF1E3A8A)),
-                  ),
-                  title: Text(item.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                  subtitle: Text('Spent: ${context.watch<SettingsProvider>().businessInfo?.currency ?? "₵"}${item.totalSpent.toStringAsFixed(2)} • ${item.invoiceCount} invoices', style: const TextStyle(fontSize: 11)),
-                ),
-              ),
-            );
-            } else if (item is Product) {
-              final currency = context.watch<SettingsProvider>().businessInfo?.currency ?? '₵';
-              bool isLowStock = item.stockQuantity <= item.minStockLevel;
-              return GestureDetector(
-                onTap: () => _showProductOptions(context, item),
-                child: Card(
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    side: BorderSide(color: Colors.grey[100]!),
-                  ),
-                  child: ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: isLowStock ? const Color(0xFFFEF2F2) : const Color(0xFFFEF3C7),
-                      child: Icon(Icons.shopping_bag, color: isLowStock ? Colors.red : const Color(0xFFD97706)),
-                    ),
-                    title: Row(
-                      children: [
-                        Expanded(child: Text(item.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14))),
-                        if (item.barcode != null) ...[
-                          const SizedBox(width: 8),
-                          const Icon(Icons.qr_code, size: 14, color: Colors.grey),
-                        ],
-                      ],
-                    ),
-                    subtitle: Text('Stock: ${item.stockQuantity} units', style: TextStyle(color: isLowStock ? Colors.red : Colors.grey, fontSize: 11, fontWeight: isLowStock ? FontWeight.bold : FontWeight.normal)),
-                    trailing: Text('$currency${item.price.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1E3A8A))),
-                  ),
-                ),
-              );
-            } else if (item is Expense) {
-              return _buildExpenseItem(item);
-            }
-          return const SizedBox();
-        },
+    if (sourceItems.isEmpty) {
+      return Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const SizedBox(height: 60),
+          Icon(icon, size: 60, color: Colors.grey[400]),
+          const SizedBox(height: 16),
+          Text(message, style: TextStyle(color: Colors.grey[600], fontSize: 16)),
+        ],
       );
     }
 
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        const SizedBox(height: 60),
-        Icon(icon, size: 64, color: Colors.grey[100]),
-        const SizedBox(height: 16),
-        Text(
-          message,
-          style: TextStyle(color: Colors.grey[400], fontSize: 14),
+    // Apply search filter
+    List<dynamic> items = sourceItems;
+    if (_searchQuery.isNotEmpty) {
+      final query = _searchQuery.toLowerCase();
+      items = items.where((item) {
+        if (item is Customer) {
+          return item.name.toLowerCase().contains(query);
+        } else if (item is Product) {
+          return item.name.toLowerCase().contains(query) || (item.barcode?.toLowerCase().contains(query) ?? false);
+        } else if (item is Expense) {
+          return item.description.toLowerCase().contains(query);
+        }
+        return false;
+      }).toList();
+    }
+
+    final searchBar = Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: TextField(
+        decoration: InputDecoration(
+          hintText: 'Search...',
+          prefixIcon: const Icon(Icons.search),
+          contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+          filled: true,
+          fillColor: Colors.white,
         ),
+        onChanged: (val) => setState(() => _searchQuery = val),
+      ),
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        searchBar,
+        if (items.isEmpty)
+          Padding(
+            padding: const EdgeInsets.all(32.0),
+            child: Center(
+              child: Text('No results found for "$_searchQuery"', style: TextStyle(color: Colors.grey[600])),
+            ),
+          )
+        else
+          ListView.separated(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: items.length,
+            separatorBuilder: (context, index) => const SizedBox(height: 10),
+            itemBuilder: (context, index) {
+              final item = items[index];
+              if (item is Customer) {
+                return GestureDetector(
+                  onTap: () => _showCustomerOptions(context, item),
+                  child: Card(
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      side: BorderSide(color: Colors.grey[100]!),
+                    ),
+                    child: ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: const Color(0xFFEEF2FF),
+                        child: const Icon(Icons.person, color: Color(0xFF1E3A8A)),
+                      ),
+                      title: Text(item.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                      subtitle: Text('Spent: ${context.watch<SettingsProvider>().businessInfo?.currency ?? "₵"}${item.totalSpent.toStringAsFixed(2)} • ${item.invoiceCount} invoices', style: const TextStyle(fontSize: 11)),
+                    ),
+                  ),
+                );
+              } else if (item is Product) {
+                final currency = context.watch<SettingsProvider>().businessInfo?.currency ?? '₵';
+                bool isLowStock = item.stockQuantity <= item.minStockLevel;
+                return GestureDetector(
+                  onTap: () => _showProductOptions(context, item),
+                  child: Card(
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      side: BorderSide(color: Colors.grey[100]!),
+                    ),
+                    child: ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: isLowStock ? const Color(0xFFFEF2F2) : const Color(0xFFFEF3C7),
+                        child: Icon(Icons.shopping_bag, color: isLowStock ? Colors.red : const Color(0xFFD97706)),
+                      ),
+                      title: Row(
+                        children: [
+                          Expanded(child: Text(item.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14))),
+                          if (item.barcode != null) ...[
+                            const SizedBox(width: 8),
+                            const Icon(Icons.qr_code, size: 14, color: Colors.grey),
+                          ],
+                        ],
+                      ),
+                      subtitle: Text('Stock: ${item.stockQuantity} units', style: TextStyle(color: isLowStock ? Colors.red : Colors.grey, fontSize: 11, fontWeight: isLowStock ? FontWeight.bold : FontWeight.normal)),
+                      trailing: Text('$currency${item.price.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1E3A8A))),
+                    ),
+                  ),
+                );
+              } else if (item is Expense) {
+                return _buildExpenseItem(item);
+              }
+              return const SizedBox();
+            },
+          ),
       ],
     );
   }
 
   void _showCustomerOptions(BuildContext context, Customer customer) {
-    final activeStaff = context.read<InvoiceProvider>().activeStaff;
+    final invoiceProvider = context.read<InvoiceProvider>();
+    final activeStaff = invoiceProvider.activeStaff;
     final isAdmin = activeStaff == null;
+    
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    final outerContext = context;
 
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (context) => Container(
+      builder: (sheetContext) => Container(
         padding: const EdgeInsets.symmetric(vertical: 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -599,13 +761,43 @@ class _HomeScreenState extends State<HomeScreen> {
             ListTile(
               leading: Container(
                 padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(color: const Color(0xFFF0F9FF), borderRadius: BorderRadius.circular(10)),
+                child: const Icon(Icons.receipt_outlined, color: Color(0xFF0284C7)),
+              ),
+              title: const Text('View Invoices', style: TextStyle(fontWeight: FontWeight.w600)),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                _showCustomerInvoicesList(outerContext, customer);
+              },
+            ),
+            const Divider(indent: 72),
+            ListTile(
+              leading: Container(
+                padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(color: const Color(0xFFEEF2FF), borderRadius: BorderRadius.circular(10)),
                 child: const Icon(Icons.edit_outlined, color: Color(0xFF1E3A8A)),
               ),
               title: const Text('Edit Customer', style: TextStyle(fontWeight: FontWeight.w600)),
               onTap: () {
-                Navigator.pop(context);
-                _showAddCustomerDialog(context, existingCustomer: customer);
+                Navigator.pop(sheetContext);
+                _showAddCustomerDialog(outerContext, existingCustomer: customer);
+              },
+            ),
+            const Divider(indent: 72),
+            ListTile(
+              leading: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(color: const Color(0xFFF0FDF4), borderRadius: BorderRadius.circular(10)),
+                child: const Icon(Icons.refresh_outlined, color: Color(0xFF22C55E)),
+              ),
+              title: const Text('Recalculate Stats', style: TextStyle(fontWeight: FontWeight.w600)),
+              subtitle: const Text('Fixes incorrect spent totals/counts', style: TextStyle(fontSize: 10)),
+              onTap: () async {
+                Navigator.pop(sheetContext);
+                await invoiceProvider.recalculateCustomerStats(customer.name);
+                scaffoldMessenger.showSnackBar(
+                  SnackBar(content: Text('Statistics recalculated for ${customer.name}')),
+                );
               },
             ),
             if (isAdmin) ...[
@@ -618,10 +810,11 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 title: const Text('Delete Customer', style: TextStyle(fontWeight: FontWeight.w600, color: Color(0xFFEF4444))),
                 onTap: () {
-                  Navigator.pop(context);
-                  _confirmDeletion(context, 'Delete Customer?', 'Are you sure you want to delete ${customer.name}?', () {
-                    context.read<InvoiceProvider>().deleteCustomer(customer.name);
-                  });
+                  Navigator.pop(sheetContext);
+                  _confirmDeletion(outerContext, 'Delete Customer?', 'Are you sure you want to delete ${customer.name}?', () async {
+                    await invoiceProvider.deleteCustomer(customer.id);
+                    return true;
+                  }, scaffoldMessenger: scaffoldMessenger);
                 },
               ),
             ] else 
@@ -635,16 +828,158 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _showCustomerInvoicesList(BuildContext context, Customer customer) {
+    final outerContext = context;
+    final invoiceProvider = context.read<InvoiceProvider>();
+    final customerInvoices = invoiceProvider.invoices.where((inv) => inv.clientInfo.name == customer.name).toList();
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        height: MediaQuery.of(context).size.height * 0.75,
+        decoration: const BoxDecoration(
+          color: Color(0xFFF8FAFC),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: Column(
+          children: [
+            Container(
+              margin: const EdgeInsets.only(top: 12),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(24),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    backgroundColor: const Color(0xFFEEF2FF),
+                    child: const Icon(Icons.person, color: Color(0xFF1E3A8A), size: 20),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(customer.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                        Text('${customerInvoices.length} Invoices Found', style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: customerInvoices.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.receipt_long_outlined, size: 64, color: Colors.grey[300]),
+                          const SizedBox(height: 16),
+                          Text('No invoices for this customer', style: TextStyle(color: Colors.grey[500])),
+                        ],
+                      ),
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.all(16),
+                      itemCount: customerInvoices.length,
+                      itemBuilder: (context, index) {
+                        final inv = customerInvoices[index];
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: InkWell(
+                            onTap: () {
+                              Navigator.pop(context);
+                              _showInvoiceOptions(outerContext, inv, viewOnly: true);
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: Colors.grey[100]!),
+                              ),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(10),
+                                    decoration: BoxDecoration(
+                                      color: inv.type == InvoiceType.receipt ? const Color(0xFFF0FDF4) : const Color(0xFFEEF2FF),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Icon(
+                                      inv.type == InvoiceType.receipt ? Icons.check_circle_outline : Icons.description_outlined,
+                                      color: inv.type == InvoiceType.receipt ? const Color(0xFF16A34A) : const Color(0xFF1E3A8A),
+                                      size: 20,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 16),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text('#${inv.id}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                                        Text(DateFormat('dd MMM yyyy').format(inv.date), style: TextStyle(color: Colors.grey[500], fontSize: 11)),
+                                      ],
+                                    ),
+                                  ),
+                                  Column(
+                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                    children: [
+                                      if (inv.amountPaid > 0 && inv.amountPaid < inv.total) ...[
+                                        Text(
+                                          '${context.watch<SettingsProvider>().businessInfo?.currency ?? "₵"}${inv.amountPaid.toStringAsFixed(2)}',
+                                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Color(0xFFF59E0B)),
+                                        ),
+                                        Text(
+                                          'of ${context.watch<SettingsProvider>().businessInfo?.currency ?? "₵"}${inv.total.toStringAsFixed(2)}',
+                                          style: TextStyle(color: Colors.grey[400], fontSize: 9),
+                                        ),
+                                      ] else ...[
+                                        Text(
+                                          '${context.watch<SettingsProvider>().businessInfo?.currency ?? "₵"}${inv.total.toStringAsFixed(2)}',
+                                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Color(0xFF1E3A8A)),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _showProductOptions(BuildContext context, Product product) {
-    final activeStaff = context.read<InvoiceProvider>().activeStaff;
+    final invoiceProvider = context.read<InvoiceProvider>();
+    final activeStaff = invoiceProvider.activeStaff;
     final isAdmin = activeStaff == null;
     final isManager = activeStaff?.role == 'Manager';
     final canEdit = isAdmin || isManager;
+    
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    final outerContext = context;
 
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (context) => Container(
+      builder: (sheetContext) => Container(
         padding: const EdgeInsets.symmetric(vertical: 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -660,8 +995,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 title: const Text('View Barcode', style: TextStyle(fontWeight: FontWeight.w600)),
                 onTap: () {
-                  Navigator.pop(context);
-                  _viewBarcode(context, product);
+                  Navigator.pop(sheetContext);
+                  _viewBarcode(outerContext, product);
                 },
               ),
               const Divider(indent: 72),
@@ -675,8 +1010,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 title: const Text('Edit Product', style: TextStyle(fontWeight: FontWeight.w600)),
                 onTap: () {
-                  Navigator.pop(context);
-                  _showAddProductDialog(context, existingProduct: product);
+                  Navigator.pop(sheetContext);
+                  _showAddProductDialog(outerContext, existingProduct: product);
                 },
               ),
               if (isAdmin) ...[
@@ -689,10 +1024,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   title: const Text('Delete Product', style: TextStyle(fontWeight: FontWeight.w600, color: Color(0xFFEF4444))),
                   onTap: () {
-                    Navigator.pop(context);
-                    _confirmDeletion(context, 'Delete Product?', 'Are you sure you want to delete ${product.name}?', () {
-                      context.read<InvoiceProvider>().deleteProduct(product.id);
-                    });
+                    Navigator.pop(sheetContext);
+                    _confirmDeletion(outerContext, 'Delete Product?', 'Are you sure you want to delete ${product.name}?', () async {
+                      await invoiceProvider.deleteProduct(product.id);
+                      return true;
+                    }, scaffoldMessenger: scaffoldMessenger);
                   },
                 ),
               ],
@@ -1059,18 +1395,32 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _confirmDeletion(BuildContext context, String title, String message, VoidCallback onConfirm) {
+  void _confirmDeletion(
+    BuildContext context,
+    String title,
+    String message,
+    Future<bool> Function() onConfirm, {
+    ScaffoldMessengerState? scaffoldMessenger,
+  }) {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: Text(title),
         content: Text(message),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('CANCEL')),
+          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('CANCEL')),
           TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              onConfirm();
+            onPressed: () async {
+              Navigator.pop(dialogContext);
+              final success = await onConfirm();
+              if (!success) {
+                scaffoldMessenger?.showSnackBar(
+                  const SnackBar(
+                    content: Text('Note: Removed locally. Cloud deletion failed or not found on server.'),
+                    backgroundColor: Colors.orange,
+                  )
+                );
+              }
             }, 
             child: const Text('DELETE', style: TextStyle(color: Colors.red)),
           ),
@@ -1086,20 +1436,34 @@ class _HomeScreenState extends State<HomeScreen> {
     final canDelete = !viewOnly && isAdmin;
     final canVoid = !viewOnly && !inv.isEstimate;
 
+    // Capture provider and scaffold BEFORE entering the bottom sheet builder
+    // to avoid the BuildContext shadowing issue (builder: (context) shadows outer context)
+    final invoiceProvider = context.read<InvoiceProvider>();
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    final outerContext = context;
+
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (context) {
+      builder: (sheetContext) {
         return Container(
-          padding: const EdgeInsets.symmetric(vertical: 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: ListView(
+            shrinkWrap: true,
+            padding: const EdgeInsets.symmetric(vertical: 24),
+            physics: const ClampingScrollPhysics(),
             children: [
-              Text(
-                inv.id,
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF1E293B)),
+              Center(
+                child: Text(
+                  inv.id,
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF1E293B)),
+                ),
               ),
               if (viewOnly) ...[  
                 const SizedBox(height: 8),
@@ -1123,10 +1487,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   title: const Text('Edit Document', style: TextStyle(fontWeight: FontWeight.w600)),
                   subtitle: const Text('Modify items, client info or details'),
                   onTap: () {
-                    Navigator.pop(context);
-                    context.read<InvoiceProvider>().updateInvoice(inv);
+                    Navigator.pop(sheetContext);
+                    invoiceProvider.updateInvoice(inv);
                     Navigator.push(
-                      context,
+                      outerContext,
                       MaterialPageRoute(builder: (_) => const InvoiceEditorScreen()),
                     );
                   },
@@ -1142,10 +1506,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 title: const Text('View / Preview', style: TextStyle(fontWeight: FontWeight.w600)),
                 subtitle: const Text('View and share PDF document'),
                 onTap: () {
-                  Navigator.pop(context);
-                  context.read<InvoiceProvider>().updateInvoice(inv);
+                  Navigator.pop(sheetContext);
+                  invoiceProvider.updateInvoice(inv);
                   Navigator.push(
-                    context,
+                    outerContext,
                     MaterialPageRoute(builder: (_) => const PdfPreviewScreen()),
                   );
                 },
@@ -1161,12 +1525,12 @@ class _HomeScreenState extends State<HomeScreen> {
                   title: const Text('Void / Refund', style: TextStyle(fontWeight: FontWeight.w600, color: Colors.orange)),
                   subtitle: const Text('Cancel this transaction and restore stock'),
                   onTap: () async {
-                    if (await _authorizeAdmin(context)) {
-                       if (!context.mounted) return;
-                       Navigator.pop(context);
-                       _confirmDeletion(context, 'Void Document?', 'This will cancel the sale and restore stock. Continue?', () {
-                         context.read<InvoiceProvider>().deleteInvoice(inv.id);
-                       });
+                    if (await _authorizeAdmin(sheetContext)) {
+                      if (!sheetContext.mounted) return;
+                      Navigator.pop(sheetContext);
+                      _confirmDeletion(outerContext, 'Void Document?', 'This will cancel the sale and restore stock. Continue?', () async {
+                        return await invoiceProvider.deleteInvoice(inv.id, restoreStock: true);
+                      }, scaffoldMessenger: scaffoldMessenger);
                     }
                   },
                 ),
@@ -1182,13 +1546,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   title: const Text('Delete Document', style: TextStyle(fontWeight: FontWeight.w600, color: Color(0xFFEF4444))),
                   subtitle: const Text('Permanently remove this document'),
                   onTap: () async {
-                     if (await _authorizeAdmin(context, force: true)) {
-                        if (!context.mounted) return;
-                        Navigator.pop(context);
-                        _confirmDeletion(context, 'Delete Document?', 'Are you sure you want to delete ${inv.id}?', () {
-                          context.read<InvoiceProvider>().deleteInvoice(inv.id);
-                        });
-                     }
+                    if (await _authorizeAdmin(sheetContext)) {
+                      if (!sheetContext.mounted) return;
+                      Navigator.pop(sheetContext);
+                      _confirmDeletion(outerContext, 'Delete Document?', 'Are you sure you want to delete ${inv.id}?\n\nThis will NOT restore the stock.', () async {
+                        return await invoiceProvider.deleteInvoice(inv.id, restoreStock: false);
+                      }, scaffoldMessenger: scaffoldMessenger);
+                    }
                   },
                 ),
               ],
@@ -1198,7 +1562,8 @@ class _HomeScreenState extends State<HomeScreen> {
         );
       },
     );
-  }
+}
+
 
   Widget _buildInvoiceList(List<Invoice> invoices, {bool viewOnly = false}) {
     if (invoices.isEmpty) {
@@ -1227,8 +1592,9 @@ class _HomeScreenState extends State<HomeScreen> {
       separatorBuilder: (context, index) => const SizedBox(height: 12),
       itemBuilder: (context, index) {
         final inv = filtered[index];
-        final isPaid = inv.type == InvoiceType.receipt;
-        final isOverdue = !isPaid && !inv.isEstimate && inv.dueDate != null && inv.dueDate!.isBefore(DateTime.now());
+        final isPaid = inv.type == InvoiceType.receipt || (inv.amountPaid >= inv.total && inv.total > 0);
+        final isPartial = !isPaid && inv.amountPaid > 0;
+        final isOverdue = !isPaid && !isPartial && !inv.isEstimate && inv.dueDate != null && inv.dueDate!.isBefore(DateTime.now());
 
         return GestureDetector(
           onTap: () => _showInvoiceOptions(context, inv, viewOnly: viewOnly),
@@ -1250,12 +1616,12 @@ class _HomeScreenState extends State<HomeScreen> {
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: isPaid ? const Color(0xFFECFDF5) : const Color(0xFFEEF2FF),
+                    color: isPaid ? const Color(0xFFECFDF5) : (isPartial ? const Color(0xFFFFF7ED) : const Color(0xFFEEF2FF)),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Icon(
                     inv.isEstimate ? Icons.assignment : (inv.type == InvoiceType.receipt ? Icons.receipt_long : Icons.description),
-                    color: isPaid ? const Color(0xFF10B981) : const Color(0xFF1E3A8A),
+                    color: isPaid ? const Color(0xFF10B981) : (isPartial ? const Color(0xFFF59E0B) : const Color(0xFF1E3A8A)),
                     size: 20
                   ),
                 ),
@@ -1266,9 +1632,12 @@ class _HomeScreenState extends State<HomeScreen> {
                     children: [
                       Row(
                         children: [
-                          Text(
-                            '#${inv.id}',
-                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                          Flexible(
+                            child: Text(
+                              '#${inv.id}',
+                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
                           const SizedBox(width: 8),
                           Text(
@@ -1280,6 +1649,20 @@ class _HomeScreenState extends State<HomeScreen> {
                               letterSpacing: 0.5,
                             ),
                           ),
+                          if (!inv.isSynced) ...[
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFEF2F2),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Text(
+                                'PENDING',
+                                style: TextStyle(color: Color(0xFFEF4444), fontSize: 8, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                       const SizedBox(height: 4),
@@ -1294,13 +1677,13 @@ class _HomeScreenState extends State<HomeScreen> {
                         decoration: BoxDecoration(
                           color: isPaid 
                               ? const Color(0xFFECFDF5) 
-                              : (isOverdue ? const Color(0xFFFEF2F2) : const Color(0xFFF8FAFC)),
+                              : (isPartial ? const Color(0xFFFFF7ED) : (isOverdue ? const Color(0xFFFEF2F2) : const Color(0xFFF8FAFC))),
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(
-                          isPaid ? 'PAID' : (isOverdue ? 'OVERDUE' : 'UNPAID'),
+                          isPaid ? 'PAID' : (isPartial ? 'STILL OWING' : (isOverdue ? 'OVERDUE' : 'UNPAID')),
                           style: TextStyle(
-                            color: isPaid ? const Color(0xFF10B981) : (isOverdue ? const Color(0xFFEF4444) : Colors.grey[600]),
+                          color: isPaid ? const Color(0xFF10B981) : (isPartial ? const Color(0xFFF59E0B) : (isOverdue ? const Color(0xFFEF4444) : Colors.grey[600])),
                             fontSize: 8,
                             fontWeight: FontWeight.bold
                           ),
@@ -1312,12 +1695,21 @@ class _HomeScreenState extends State<HomeScreen> {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    Text(
-                      '$currency${inv.total.toStringAsFixed(2)}',
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                    ),
-                    const SizedBox(height: 4),
-
+                    if (isPartial) ...[
+                      Text(
+                        '$currency${inv.amountPaid.toStringAsFixed(2)}',
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Color(0xFFF59E0B)),
+                      ),
+                      Text(
+                        'of $currency${inv.total.toStringAsFixed(2)}',
+                        style: TextStyle(color: Colors.grey[400], fontSize: 10),
+                      ),
+                    ] else ...[
+                      Text(
+                        '$currency${inv.total.toStringAsFixed(2)}',
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Color(0xFF1E3A8A)),
+                      ),
+                    ],
                   ],
                 ),
               ],
@@ -1425,20 +1817,32 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _showExpenseOptions(Expense expense) {
-    final isAdmin = context.read<InvoiceProvider>().activeStaff == null;
+    final invoiceProvider = context.read<InvoiceProvider>();
+    final isAdmin = invoiceProvider.activeStaff == null;
+    
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    final outerContext = context;
+
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (context) => Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const SizedBox(height: 16),
+      builder: (sheetContext) => Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.symmetric(vertical: 24),
+          physics: const ClampingScrollPhysics(),
+          children: [
           if (isAdmin) ...[
             ListTile(
               leading: const Icon(Icons.edit_outlined),
               title: const Text('Edit Expense'),
               onTap: () {
-                Navigator.pop(context);
+                Navigator.pop(sheetContext);
                 _showAddExpenseDialog(existingExpense: expense);
               },
             ),
@@ -1446,10 +1850,11 @@ class _HomeScreenState extends State<HomeScreen> {
               leading: const Icon(Icons.delete_outline, color: Colors.red),
               title: const Text('Delete Expense', style: TextStyle(color: Colors.red)),
               onTap: () {
-                Navigator.pop(context);
-                _confirmDeletion(context, 'Delete Expense?', 'Delete this expense record?', () {
-                  context.read<InvoiceProvider>().deleteExpense(expense.id);
-                });
+                Navigator.pop(sheetContext);
+                _confirmDeletion(outerContext, 'Delete Expense?', 'Delete this expense record?', () async {
+                  await invoiceProvider.deleteExpense(expense.id);
+                  return true;
+                }, scaffoldMessenger: scaffoldMessenger);
               },
             ),
           ] else 
@@ -1460,8 +1865,9 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(height: 16),
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 
   Future<bool> _authorizeAdmin(BuildContext context, {bool force = false}) async {
     final invoiceProvider = context.read<InvoiceProvider>();

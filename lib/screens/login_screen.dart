@@ -26,6 +26,23 @@ class _LoginScreenState extends State<LoginScreen> {
   final _pinController = TextEditingController();
 
   @override
+  void initState() {
+    super.initState();
+    // Auto-redirect if already logged in
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkSession();
+    });
+  }
+
+  void _checkSession() {
+    if (!mounted) return;
+    final auth = context.read<AuthProvider>();
+    if (auth.isLoggedIn) {
+      Navigator.pushReplacementNamed(context, '/home');
+    }
+  }
+
+  @override
   void dispose() {
     _emailController.dispose();
     _passController.dispose();
@@ -89,6 +106,15 @@ class _LoginScreenState extends State<LoginScreen> {
     final auth = context.watch<AuthProvider>();
     final invoice = context.watch<InvoiceProvider>();
     final settings = context.watch<SettingsProvider>();
+    
+    // Auto-redirect to home only if a staff member is already logged in
+    if (auth.isLoggedIn && invoice.activeStaff != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) Navigator.pushReplacementNamed(context, '/home');
+      });
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
     final staffList = invoice.staff;
 
     return Scaffold(

@@ -166,12 +166,14 @@ class InvoiceItem {
   final int quantity;
   final double sellingPrice;
   final double? costPrice;
+  final String? productId; // Added for inventory tracking
 
   InvoiceItem({
     required this.name,
     required this.quantity,
     required this.sellingPrice,
     this.costPrice,
+    this.productId,
   });
 
   double get total => quantity * sellingPrice;
@@ -182,6 +184,7 @@ class InvoiceItem {
       'quantity': quantity,
       'sellingPrice': sellingPrice,
       'costPrice': costPrice,
+      'productId': productId,
     };
   }
 
@@ -191,6 +194,7 @@ class InvoiceItem {
       quantity: map['quantity']?.toInt() ?? 0,
       sellingPrice: map['sellingPrice']?.toDouble() ?? 0.0,
       costPrice: map['costPrice']?.toDouble(),
+      productId: map['productId'],
     );
   }
 
@@ -199,12 +203,14 @@ class InvoiceItem {
     int? quantity,
     double? sellingPrice,
     double? costPrice,
+    String? productId,
   }) {
     return InvoiceItem(
       name: name ?? this.name,
       quantity: quantity ?? this.quantity,
       sellingPrice: sellingPrice ?? this.sellingPrice,
       costPrice: costPrice ?? this.costPrice,
+      productId: productId ?? this.productId,
     );
   }
 }
@@ -229,6 +235,8 @@ class Invoice {
   final bool isPos;
   final String? cashierName;
   final String? stationName;
+  final bool stockReduced; // Track if stock has been decremented
+  final bool isSynced; // UI flag to show if document is saved in cloud
 
   Invoice({
     required this.id,
@@ -249,6 +257,8 @@ class Invoice {
     this.isPos = false,
     this.cashierName,
     this.stationName,
+    this.stockReduced = false,
+    this.isSynced = true,
   });
 
   double get subtotal => items.fold(0, (sum, item) => sum + item.total);
@@ -286,6 +296,8 @@ class Invoice {
       'isPos': isPos,
       'cashierName': cashierName,
       'stationName': stationName,
+      'stockReduced': stockReduced,
+      'isSynced': isSynced,
     };
   }
 
@@ -309,6 +321,8 @@ class Invoice {
       isPos: map['isPos'] ?? false,
       cashierName: map['cashierName'],
       stationName: map['stationName'],
+      stockReduced: map['stockReduced'] ?? false,
+      isSynced: map['isSynced'] ?? true,
     );
   }
 
@@ -335,6 +349,8 @@ class Invoice {
     bool? isPos,
     String? cashierName,
     String? stationName,
+    bool? stockReduced,
+    bool? isSynced,
   }) {
     return Invoice(
       id: id ?? this.id,
@@ -355,6 +371,8 @@ class Invoice {
       isPos: isPos ?? this.isPos,
       cashierName: cashierName ?? this.cashierName,
       stationName: stationName ?? this.stationName,
+      stockReduced: stockReduced ?? this.stockReduced,
+      isSynced: isSynced ?? this.isSynced,
     );
   }
 }

@@ -81,7 +81,8 @@ class PdfService {
 
     final currency = businessInfo.currency;
     final dateStr = 'DATE: ${DateFormat('dd MMM yyyy').format(invoice.date).toUpperCase()}';
-    final docTitle = invoice.isEstimate ? 'ESTIMATE' : (invoice.type == InvoiceType.invoice ? 'INVOICE' : 'RECEIPT');
+    final isPaid = invoice.type == InvoiceType.receipt || (invoice.amountPaid >= invoice.total && invoice.total > 0);
+    final docTitle = invoice.isEstimate ? 'ESTIMATE' : (invoice.type == InvoiceType.invoice ? (isPaid ? 'PAID INVOICE' : 'INVOICE') : 'RECEIPT');
 
     pdf.addPage(
       pw.Page(
@@ -92,14 +93,30 @@ class PdfService {
             return _buildPosLayout(invoice, businessInfo, currency, dateStr, logoImage, docTitle);
           }
           
+          bool isLandscape = pageFormat.width > pageFormat.height;
+          PdfPageFormat baseFormat = isLandscape ? PdfPageFormat.a4.landscape : PdfPageFormat.a4;
+          
+          pw.Widget content;
           switch (businessInfo.pdfTemplate) {
             case PdfTemplate.classic:
-              return _buildClassicLayout(invoice, businessInfo, currency, dateStr, logoImage, docTitle, watermarkImage, signatureImage);
+              content = _buildClassicLayout(invoice, businessInfo, currency, dateStr, logoImage, docTitle, watermarkImage, signatureImage);
+              break;
             case PdfTemplate.minimalist:
-              return _buildMinimalistLayout(invoice, businessInfo, currency, dateStr, logoImage, docTitle, watermarkImage, signatureImage);
+              content = _buildMinimalistLayout(invoice, businessInfo, currency, dateStr, logoImage, docTitle, watermarkImage, signatureImage);
+              break;
             case PdfTemplate.sidebar:
-              return _buildSidebarLayout(invoice, businessInfo, currency, dateStr, logoImage, docTitle, watermarkImage, signatureImage);
+              content = _buildSidebarLayout(invoice, businessInfo, currency, dateStr, logoImage, docTitle, watermarkImage, signatureImage, baseFormat);
+              break;
           }
+          
+          return pw.FittedBox(
+            fit: pw.BoxFit.contain,
+            child: pw.Container(
+              width: baseFormat.width,
+              height: baseFormat.height,
+              child: content,
+            ),
+          );
         },
       ),
     );
@@ -116,6 +133,7 @@ class PdfService {
     String docTitle,
     pw.MemoryImage? watermarkImage,
     pw.MemoryImage? signatureImage,
+    PdfPageFormat pageFormat,
   ) {
     final dueStr = invoice.dueDate != null ? 'DUE: ${DateFormat('dd MMM yyyy').format(invoice.dueDate!).toUpperCase()}' : '';
     
@@ -175,8 +193,8 @@ class PdfService {
                         // Logo box
                         if (logoImage != null)
                           pw.Container(
-                            width: 72,
-                            height: 72,
+                            width: pageFormat.height < 500 ? 56 : 72,
+                            height: pageFormat.height < 500 ? 56 : 72,
                             padding: const pw.EdgeInsets.all(6),
                             decoration: pw.BoxDecoration(
                               color: PdfColors.white,
@@ -200,7 +218,7 @@ class PdfService {
                             ),
                           ),
 
-                        pw.SizedBox(height: 14),
+                        pw.SizedBox(height: pageFormat.height < 500 ? 8 : 14),
                         pw.Text(
                           businessInfo.name.toUpperCase(),
                           style: pw.TextStyle(
@@ -209,7 +227,7 @@ class PdfService {
                             fontWeight: pw.FontWeight.bold,
                           ),
                         ),
-                        pw.SizedBox(height: 16),
+                        pw.SizedBox(height: pageFormat.height < 500 ? 10 : 16),
 
                         // Contact info
                         _sidebarLabel('CONTACT'),
@@ -250,7 +268,7 @@ class PdfService {
             // ========== RIGHT MAIN CONTENT ==========
             pw.Expanded(
               child: pw.Padding(
-                padding: const pw.EdgeInsets.fromLTRB(24, 24, 24, 20),
+                padding: pw.EdgeInsets.fromLTRB(24, 24, 24, pageFormat.height < 500 ? 10 : 20),
                 child: pw.Column(
                   crossAxisAlignment: pw.CrossAxisAlignment.start,
                   children: [
@@ -265,7 +283,7 @@ class PdfService {
                             pw.Text(
                               docTitle,
                               style: pw.TextStyle(
-                                fontSize: 32,
+                                fontSize: pageFormat.height < 500 ? 24 : 32,
                                 fontWeight: pw.FontWeight.bold,
                                 color: _navyBlue,
                               ),
@@ -291,7 +309,7 @@ class PdfService {
                       ],
                     ),
 
-                    pw.SizedBox(height: 20),
+                    pw.SizedBox(height: pageFormat.height < 500 ? 10 : 20),
 
                     // --- BILL TO ---
                     pw.Container(
@@ -325,7 +343,7 @@ class PdfService {
                       ),
                     ),
 
-                    pw.SizedBox(height: 16),
+                    pw.SizedBox(height: pageFormat.height < 500 ? 8 : 16),
 
                     // --- Items Table ---
                     pw.Table(
@@ -366,7 +384,7 @@ class PdfService {
                       ],
                     ),
 
-                    pw.SizedBox(height: 14),
+                    pw.SizedBox(height: pageFormat.height < 500 ? 6 : 14),
 
                     // --- Totals ---
                     pw.Row(
@@ -375,16 +393,18 @@ class PdfService {
                         pw.Column(
                           crossAxisAlignment: pw.CrossAxisAlignment.end,
                           children: [
-                            _totalRow('Subtotal:', '$currency${invoice.subtotal.toStringAsFixed(2)}'),
+                            _totalRow('Subtotal:', '$currency${invoice.subtotal.toStringAsFixed(2)}', isShort: pageFormat.height < 500),
                             if (invoice.discountValue > 0)
                               _totalRow(
                                 'Discount:',
                                 '$currency${invoice.discountAmount.toStringAsFixed(2)}',
+                                isShort: pageFormat.height < 500,
                               ),
                             if (invoice.taxValue > 0)
                               _totalRow(
                                 'Tax (${invoice.taxValue.toStringAsFixed(0)}%):',
                                 '+ $currency${invoice.taxAmount.toStringAsFixed(2)}',
+                                isShort: pageFormat.height < 500,
                               ),
                             pw.SizedBox(height: 4),
                             // Grand Total row (blue bold)
@@ -415,29 +435,34 @@ class PdfService {
                                 ),
                               ],
                             ),
-                            // Balance row (red)
+                            _totalRow('Amount Paid:', '$currency${invoice.amountPaid.toStringAsFixed(2)}', isShort: pageFormat.height < 500),
+                            
+                            if (invoice.amountPaid > invoice.total)
+                              _totalRow('CHANGE:', '$currency${(invoice.amountPaid - invoice.total).toStringAsFixed(2)}', isShort: pageFormat.height < 500),
+
+                            // Balance row (dynamic color)
                             pw.Row(
                               children: [
                                 pw.SizedBox(
                                   width: 110,
                                   child: pw.Text(
-                                    'BALANCE',
+                                    (invoice.total - invoice.amountPaid) <= 0 ? 'STATUS' : 'DEBIT',
                                     style: pw.TextStyle(
                                       fontSize: 10,
                                       fontWeight: pw.FontWeight.bold,
-                                      color: _red,
+                                      color: (invoice.total - invoice.amountPaid) <= 0 ? PdfColors.green : _red,
                                     ),
                                   ),
                                 ),
                                 pw.SizedBox(
                                   width: 80,
                                   child: pw.Text(
-                                    '$currency${(invoice.total - invoice.amountPaid).toStringAsFixed(2)}',
+                                    (invoice.total - invoice.amountPaid) <= 0 ? 'FULLY PAID' : '$currency${(invoice.total - invoice.amountPaid).toStringAsFixed(2)}',
                                     textAlign: pw.TextAlign.right,
                                     style: pw.TextStyle(
                                       fontSize: 10,
                                       fontWeight: pw.FontWeight.bold,
-                                      color: _red,
+                                      color: (invoice.total - invoice.amountPaid) <= 0 ? PdfColors.green : _red,
                                     ),
                                   ),
                                 ),
@@ -676,7 +701,14 @@ class PdfService {
                         pw.Divider(color: _darkText),
                         _classicTotalRow('GRAND TOTAL', '$currency${invoice.total.toStringAsFixed(2)}', isBold: true, color: _navyBlue),
                         _classicTotalRow('Amount Paid', '$currency${invoice.amountPaid.toStringAsFixed(2)}'),
-                        _classicTotalRow('Balance Due', '$currency${(invoice.total - invoice.amountPaid).toStringAsFixed(2)}', isBold: true, color: _red),
+                        if (invoice.amountPaid > invoice.total)
+                          _classicTotalRow('Change', '$currency${(invoice.amountPaid - invoice.total).toStringAsFixed(2)}', color: PdfColors.green),
+                        _classicTotalRow(
+                          (invoice.total - invoice.amountPaid) <= 0 ? 'Status' : 'DEBIT', 
+                          (invoice.total - invoice.amountPaid) <= 0 ? 'FULLY PAID' : '$currency${(invoice.total - invoice.amountPaid).toStringAsFixed(2)}', 
+                          isBold: true, 
+                          color: (invoice.total - invoice.amountPaid) <= 0 ? PdfColors.green : _red
+                        ),
                       ],
                     ),
                   ),
@@ -843,6 +875,15 @@ class PdfService {
                       if (invoice.discountAmount > 0)
                         _minimalTotalRow('Discount', '$currency${invoice.discountAmount.toStringAsFixed(2)}'),
                       _minimalTotalRow('Total', '$currency${invoice.total.toStringAsFixed(2)}', isBold: true),
+                      _minimalTotalRow('Amount Paid', '$currency${invoice.amountPaid.toStringAsFixed(2)}'),
+                      if (invoice.amountPaid > invoice.total)
+                        _minimalTotalRow('Change', '$currency${(invoice.amountPaid - invoice.total).toStringAsFixed(2)}', color: PdfColors.green),
+                      _minimalTotalRow(
+                        (invoice.total - invoice.amountPaid) <= 0 ? 'Status' : 'DEBIT', 
+                        (invoice.total - invoice.amountPaid) <= 0 ? 'FULLY PAID' : '$currency${(invoice.total - invoice.amountPaid).toStringAsFixed(2)}', 
+                        isBold: true,
+                        color: (invoice.total - invoice.amountPaid) <= 0 ? PdfColors.green : _red
+                      ),
                     ],
                   ),
                 ],
@@ -875,14 +916,14 @@ class PdfService {
     );
   }
 
-  static pw.Widget _minimalTotalRow(String label, String value, {bool isBold = false}) {
+  static pw.Widget _minimalTotalRow(String label, String value, {bool isBold = false, PdfColor? color}) {
     return pw.Padding(
       padding: const pw.EdgeInsets.symmetric(vertical: 2),
       child: pw.Row(
         children: [
           pw.Text(label, style: pw.TextStyle(fontSize: 9, color: _greyText)),
           pw.SizedBox(width: 20),
-          pw.Text(value, style: pw.TextStyle(fontSize: 9, fontWeight: isBold ? pw.FontWeight.bold : pw.FontWeight.normal)),
+          pw.Text(value, style: pw.TextStyle(fontSize: 9, fontWeight: isBold ? pw.FontWeight.bold : pw.FontWeight.normal, color: color)),
         ],
       ),
     );
@@ -944,19 +985,19 @@ class PdfService {
     );
   }
 
-  static pw.Widget _totalRow(String label, String value) {
+  static pw.Widget _totalRow(String label, String value, {bool isShort = false}) {
     return pw.Padding(
-      padding: const pw.EdgeInsets.symmetric(vertical: 1.5),
+      padding: pw.EdgeInsets.symmetric(vertical: isShort ? 0.5 : 1.5),
       child: pw.Row(
         mainAxisSize: pw.MainAxisSize.min,
         children: [
           pw.SizedBox(
             width: 110,
-            child: pw.Text(label, style: const pw.TextStyle(fontSize: 9, color: _greyText)),
+            child: pw.Text(label, style: pw.TextStyle(fontSize: isShort ? 8 : 9, color: _greyText)),
           ),
           pw.SizedBox(
             width: 80,
-            child: pw.Text(value, textAlign: pw.TextAlign.right, style: const pw.TextStyle(fontSize: 9, color: _darkText)),
+            child: pw.Text(value, textAlign: pw.TextAlign.right, style: pw.TextStyle(fontSize: isShort ? 8 : 9, color: _darkText)),
           ),
         ],
       ),
@@ -992,9 +1033,9 @@ class PdfService {
             style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold, color: _darkText),
             textAlign: pw.TextAlign.center,
           ),
-          if ((businessInfo.posSubtitle ?? businessInfo.terms) != null && (businessInfo.posSubtitle ?? businessInfo.terms)!.isNotEmpty)
+          if (businessInfo.posSubtitle != null && businessInfo.posSubtitle!.isNotEmpty)
             pw.Text(
-              businessInfo.posSubtitle ?? businessInfo.terms!,
+              businessInfo.posSubtitle!,
               style: pw.TextStyle(fontSize: 10, fontStyle: pw.FontStyle.italic, color: _darkText),
               textAlign: pw.TextAlign.center,
             ),
@@ -1070,10 +1111,11 @@ class PdfService {
           // Items Header
           pw.Row(
             children: [
-              pw.Expanded(flex: 4, child: pw.Text('ITEM', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: _darkText))),
-              pw.Expanded(flex: 1, child: pw.Text('QTY', textAlign: pw.TextAlign.center, style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: _darkText))),
-              pw.Expanded(flex: 2, child: pw.Text('PRICE', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: _darkText))),
-              pw.Expanded(flex: 2, child: pw.Text('TOTAL', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: _darkText))),
+              pw.Expanded(flex: 7, child: pw.Text('ITEM', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: _darkText))),
+              pw.Expanded(flex: 2, child: pw.Text('QTY', textAlign: pw.TextAlign.center, style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: _darkText))),
+              pw.Expanded(flex: 4, child: pw.Text('PRICE', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: _darkText))),
+              pw.SizedBox(width: 6), // Forced gap to prevent collision
+              pw.Expanded(flex: 4, child: pw.Text('TOTAL', textAlign: pw.TextAlign.right, style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: _darkText))),
             ],
           ),
           pw.SizedBox(height: 4),
@@ -1087,10 +1129,11 @@ class PdfService {
               child: pw.Row(
                 crossAxisAlignment: pw.CrossAxisAlignment.start,
                 children: [
-                  pw.Expanded(flex: 4, child: pw.Text(item.name, style: const pw.TextStyle(fontSize: 10, color: _darkText))),
-                  pw.Expanded(flex: 1, child: pw.Text('${item.quantity}', textAlign: pw.TextAlign.center, style: const pw.TextStyle(fontSize: 10, color: _darkText))),
-                  pw.Expanded(flex: 2, child: pw.Text('$currency${item.sellingPrice.toStringAsFixed(2)}', textAlign: pw.TextAlign.right, style: const pw.TextStyle(fontSize: 10, color: _darkText))),
-                  pw.Expanded(flex: 2, child: pw.Text('$currency${item.total.toStringAsFixed(2)}', textAlign: pw.TextAlign.right, style: const pw.TextStyle(fontSize: 10, color: _darkText))),
+                  pw.Expanded(flex: 7, child: pw.Text(item.name, style: const pw.TextStyle(fontSize: 10, color: _darkText))),
+                  pw.Expanded(flex: 2, child: pw.Text('${item.quantity}', textAlign: pw.TextAlign.center, style: const pw.TextStyle(fontSize: 10, color: _darkText))),
+                  pw.Expanded(flex: 4, child: pw.Text('$currency ${item.sellingPrice.toStringAsFixed(2)}', textAlign: pw.TextAlign.right, style: const pw.TextStyle(fontSize: 10, color: _darkText))),
+                  pw.SizedBox(width: 6), // Forced gap to prevent collision
+                  pw.Expanded(flex: 4, child: pw.Text('$currency ${item.total.toStringAsFixed(2)}', textAlign: pw.TextAlign.right, style: const pw.TextStyle(fontSize: 10, color: _darkText))),
                 ],
               ),
             );
@@ -1134,10 +1177,18 @@ class PdfService {
             pw.Text('PAID', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: _darkText)),
             pw.Text('$currency${invoice.amountPaid.toStringAsFixed(2)}', style: const pw.TextStyle(fontSize: 10, color: _darkText)),
           ]),
-          pw.SizedBox(height: 2),
           pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
-            pw.Text('CHANGE', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: _darkText)),
-            pw.Text('$currency${(invoice.amountPaid > invoice.total ? invoice.amountPaid - invoice.total : 0.0).toStringAsFixed(2)}', style: const pw.TextStyle(fontSize: 10, color: _darkText)),
+            pw.Text(invoice.amountPaid >= invoice.total ? 'CHANGE' : 'DEBIT', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: _darkText)),
+            pw.Text(
+              invoice.amountPaid >= invoice.total 
+                ? '$currency${(invoice.amountPaid - invoice.total).toStringAsFixed(2)}' 
+                : '$currency${(invoice.total - invoice.amountPaid).toStringAsFixed(2)}', 
+              style: pw.TextStyle(
+                fontSize: 10, 
+                fontWeight: pw.FontWeight.bold,
+                color: invoice.amountPaid >= invoice.total ? _darkText : _red
+              )
+            ),
           ]),
 
           pw.SizedBox(height: 8),
